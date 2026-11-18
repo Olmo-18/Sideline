@@ -91,7 +91,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   assert.equal((await ed()).ledger, undefined);
   const previousTuesday = new Date();
   previousTuesday.setUTCDate(previousTuesday.getUTCDate() - ((previousTuesday.getUTCDay() + 5) % 7 || 7));
-  const previousKickoff = previousTuesday.toISOString().slice(0, 10) + 'T14:00';
+  const previousKickoff = previousTuesday.toISOString().slice(0, 10) + 'T19:00';
   const rolled = await admin('game', {
     title: 'Tuesday football', venue: 'Main pitch', kickoff: previousKickoff, capacity: 2,
     cost: 1600, weekly: true, fee: 600
@@ -99,7 +99,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   assert.equal(rolled.game.weekly, true);
   assert.notEqual(rolled.game.kickoff.slice(0, 10), previousKickoff.slice(0, 10));
   const ukTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' });
-  assert.match(ukTime.format(new Date(rolled.game.kickoff)), /^Tue.*14:00$/);
+  assert.match(ukTime.format(new Date(rolled.game.kickoff)), /^Tue.*19:00$/);
   assert.equal(rolled.confirmed, 0);
   assert.equal(rolled.due, 600);
   const oldTom = rolled.ledger.find(row => row.name === 'Tom L');

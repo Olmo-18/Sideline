@@ -51,12 +51,21 @@ function archive(state) {
   state.teams = null;
 }
 
+const weeklyKickoffHour = 19;
+
 function rollFixture(state) {
-  if (!state.game?.weekly || Date.now() < Date.parse(state.game.kickoff) + 7200000) return;
-  archive(state);
+  if (!state.game?.weekly) return;
   const next = new Date(state.game.kickoff);
-  do { next.setDate(next.getDate() + 7); }
-  while (next.getTime() + 7200000 <= Date.now());
+  const now = Date.now();
+  if (now < next.getTime()) {
+    next.setHours(weeklyKickoffHour, 0, 0, 0);
+  } else {
+    if (now < next.getTime() + 7200000) return;
+    archive(state);
+    next.setHours(weeklyKickoffHour, 0, 0, 0);
+    do { next.setDate(next.getDate() + 7); }
+    while (next.getTime() + 7200000 <= now);
+  }
   state.game.kickoff = next.toISOString();
 }
 
@@ -143,7 +152,7 @@ function manage(state, action, data) {
       !Number.isInteger(capacity) || capacity < 2 || capacity > 60 ||
       !Number.isInteger(cost) || cost < 0 || cost > 1000000 ||
       (!Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000) ||
-      (weekly && (localKickoff.getDay() !== 2 || localKickoff.getHours() !== 14 || localKickoff.getMinutes() !== 0))) throw err('Check the fixture details.');
+      (weekly && (localKickoff.getDay() !== 2 || localKickoff.getHours() !== weeklyKickoffHour || localKickoff.getMinutes() !== 0))) throw err('Check the fixture details.');
     if (!data.fresh && capacity < playing(state).length + state.players.filter(p => p.status === 'offered').length) {
       throw err('Capacity is below the number of confirmed and offered places.');
     }

@@ -137,7 +137,7 @@ function fixture(fresh) {
     '"></label><label>Pitch<input name="venue" required maxlength="100" value="' + esc(game?.venue) +
     '"></label><label>Kick-off (UK time)<input type="datetime-local" name="kickoff" required value="' +
     (game ? parts(fresh ? Date.parse(game.kickoff) + 7 * 86400000 : game.kickoff) : '') +
-    '"></label><label class="check"><input type="checkbox" name="weekly" ' + (game?.weekly ? 'checked' : '') + '> Repeat every Tuesday at 2 pm</label><div class="form-columns"><label>Places<input name="capacity" type="number" min="2" max="60" required value="' + (game?.capacity ?? 14) +
+    '"></label><label class="check"><input type="checkbox" name="weekly" ' + (game?.weekly ? 'checked' : '') + '> Repeat every Tuesday at 7 pm</label><div class="form-columns"><label>Places<input name="capacity" type="number" min="2" max="60" required value="' + (game?.capacity ?? 14) +
     '"></label><label>Pitch cost (£)<input name="cost" type="number" min="0" max="10000" step="0.01" required value="' + (game ? game.cost / 100 : 112) +
     '"></label></div><label>Fixed fee per player (£)<input name="fee" type="number" min="0" max="1000" step="0.01" required value="' + ((state.game ? state.due : 600) / 100) + '"></label><label>Payment link or details <textarea name="payment" maxlength="300">' + esc(game?.payment) +
     '</textarea></label>', 'Save fixture', values => update({ ...values, action: 'game', fresh, weekly: Boolean(values.weekly),
@@ -148,7 +148,7 @@ function fixture(fresh) {
   repeat.onchange = () => {
     if (!repeat.checked) return;
     const now = parts(new Date());
-    const chosen = new Date((kickoff.value.slice(0, 10) || now.slice(0, 10)) + 'T14:00:00Z');
+    const chosen = new Date((kickoff.value.slice(0, 10) || now.slice(0, 10)) + 'T19:00:00Z');
     chosen.setUTCDate(chosen.getUTCDate() + (2 - chosen.getUTCDay() + 7) % 7);
     if (chosen.toISOString().slice(0, 16) <= now) chosen.setUTCDate(chosen.getUTCDate() + 7);
     kickoff.value = chosen.toISOString().slice(0, 16);

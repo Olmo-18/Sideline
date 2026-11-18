@@ -29,6 +29,9 @@ const queue = state => state.players.filter(p => p.status === 'reserve');
 const started = state => Date.parse(state.game?.kickoff) <= Date.now();
 
 const defaultFee = 600;
+const meetingPoint = 'eaten.tilt.linked';
+const extraFixtures = state => Object.values(state.fixtures || {});
+const allFixtures = state => [state, ...extraFixtures(state)];
 const fee = state => state.game.fee ?? defaultFee;
 const publicName = player => {
   if (!player.fullName) return player.name;
@@ -40,11 +43,15 @@ function paymentRows(state) {
   if (!state.game) return [];
   return state.players.filter(p => p.status === 'playing' || p.paid).map(p => ({
     id: p.id, name: p.name, game: state.game.title, kickoff: state.game.kickoff,
-    fee: fee(state), paid: p.paid, played: started(state) && p.status === 'playing'
+    fee: fee(state), paid: p.paid, played: started(state) && (p.attended ?? (p.status === 'playing'))
   }));
 }
 
 const playerKey = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+
+function allPaymentRows(state) {
+  return [...allFixtures(state).flatMap(paymentRows), ...(state.ledger || []).slice().reverse()];
+}
 
 function playerAccounts(state) {
   const accounts = new Map();
@@ -53,8 +60,10 @@ function playerAccounts(state) {
     if (!accounts.has(key)) accounts.set(key, { key, name, games: 0, charged: 0, paid: 0, payments: [] });
     return accounts.get(key);
   };
-  for (const player of state.players) accountFor(player.name);
-  for (const row of [...(state.ledger || []), ...paymentRows(state)]) {
+  for (const fixture of allFixtures(state)) {
+    for (const player of fixture.players) accountFor(player.name);
+  }
+  for (const row of allPaymentRows(state)) {
     const account = accountFor(row.name);
     if (row.played !== false) {
       account.games++;
@@ -92,13 +101,24 @@ function rollFixture(state) {
     do { next.setDate(next.getDate() + 7); }
     while (next.getTime() + 7200000 <= now);
   }
-  state.game.kickoff = next.toISOString();
+  const kickoff = next.toISOString();
+  if (now >= Date.parse(state.game.kickoff) + 7200000) {
+    const planned = extraFixtures(state).find(fixture => fixture.game.kickoff === kickoff);
+    if (planned) {
+      state.game = { ...planned.game, weekly: true };
+      state.players = planned.players;
+      state.teams = planned.teams;
+      delete state.fixtures[planned.id];
+      return;
+    }
+  }
+  state.game.kickoff = kickoff;
 }
 
-function maintain(state) {
+function maintain(state, recurring = true) {
   if (!state.game) return;
   if (state.game.title === 'Tuesday football') state.game.title = 'Tuesday Football';
-  rollFixture(state);
+  if (recurring) rollFixture(state);
   if (state.teams) {
     const eligible = new Set(playing(state).map(p => p.id));
     state.teams = state.teams.map(side => side.filter(id => eligible.has(id)));
@@ -114,7 +134,7 @@ function maintain(state) {
   }
 }
 
-function view(state, organiser, identity) {
+function view(state, organiser, identity, root = state) {
   const waiting = queue(state);
   const confirmed = playing(state);
   const mine = state.players.find(p => p.identity === identity);
@@ -122,14 +142,18 @@ function view(state, organiser, identity) {
   const teams = state.teams && state.teams.map(side => side.map(id => publicName(state.players.find(p => p.id === id))));
   const assigned = new Set(state.teams?.flat());
   return {
-    organiser, game: state.game, confirmed: confirmed.length, reserves: waiting.length,
+    organiser, game: state.game && { ...state.game, meetingPoint }, confirmed: confirmed.length, reserves: waiting.length,
     offered: state.players.filter(p => p.status === 'offered').length,
     due: state.game ? fee(state) : 0,
     closed: cutoff <= Date.now(),
     mine: mine && { name: mine.name, status: mine.status, until: mine.until, paid: mine.paid, position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
     players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(publicName),
-    ...(organiser && { ledger: [...paymentRows(state), ...(state.ledger || []).slice().reverse()], accounts: playerAccounts(state) }),
+    ...(organiser && { ledger: allPaymentRows(root), accounts: playerAccounts(root), fixtureId: state.id || '',
+      fixtures: allFixtures(root).filter(fixture => fixture.game).map(fixture => ({
+        id: fixture.id || '', title: fixture.game.title, kickoff: fixture.game.kickoff,
+        confirmed: playing(fixture).length
+      })).sort((a, b) => a.kickoff.localeCompare(b.kickoff)) }),
     unassigned: confirmed.filter(p => !assigned.has(p.id)).length
   };
 }
@@ -164,14 +188,14 @@ function add(state, name, identity, organiser) {
   state.players.push({ id: player?.id || token(), name, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
 }
 
-function manage(state, action, data) {
+function manage(state, action, data, root = state) {
   if (action === 'game') {
     const title = clean(data.title, 80);
     const venue = clean(data.venue, 100);
     const kickoff = Date.parse(data.kickoff);
     const { capacity, cost } = data;
     const fixedFee = data.fee ?? defaultFee;
-    const weekly = data.weekly === true;
+    const weekly = state === root && data.weekly === true;
     const localKickoff = new Date(kickoff);
     if (!title || !venue || !/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(data.kickoff) ||
       !Number.isFinite(kickoff) || (!state.game || data.fresh) && kickoff <= Date.now() ||
@@ -182,30 +206,39 @@ function manage(state, action, data) {
     if (!data.fresh && capacity < playing(state).length + state.players.filter(p => p.status === 'offered').length) {
       throw err('Capacity is below the number of confirmed and offered places.');
     }
+    if (allFixtures(root).some(fixture => fixture !== state && fixture.game?.kickoff === new Date(kickoff).toISOString())) {
+      throw err('A fixture already exists at that kick-off time.');
+    }
     if (data.fresh) archive(state);
     state.game = { title, venue, kickoff: new Date(kickoff).toISOString(), capacity, cost, fee: fixedFee, weekly, payment: clean(data.payment, 300) };
     return;
   }
   if (!state.game) throw err('Create a fixture first.');
   if (action === 'record-payment') {
-    const account = playerAccounts(state).find(entry => entry.key === data.key);
+    const account = playerAccounts(root).find(entry => entry.key === data.key);
     if (!account || !Number.isInteger(data.amount) || data.amount < 1 || data.amount > 1000000 ||
         typeof data.id !== 'string' || !/^[a-f0-9-]{36}$/.test(data.id)) throw err('Choose a player and enter a valid payment amount.');
-    state.payments ||= [];
-    if (!state.payments.some(payment => payment.id === data.id)) {
-      state.payments.push({ id: data.id, name: account.name, amount: data.amount, date: new Date().toISOString() });
+    root.payments ||= [];
+    if (!root.payments.some(payment => payment.id === data.id)) {
+      root.payments.push({ id: data.id, name: account.name, amount: data.amount, date: new Date().toISOString() });
     }
     return;
   }
   if (action === 'undo-payment') {
-    state.payments = (state.payments || []).filter(payment => payment.id !== data.id);
+    root.payments = (root.payments || []).filter(payment => payment.id !== data.id);
     return;
   }
   if (action === 'attendance') {
-    const row = state.ledger?.find(entry => entry.id === data.id && entry.kickoff === data.kickoff);
-    if (!row || Date.parse(row.kickoff) > Date.now()) throw err('This game has not finished.');
+    const row = root.ledger?.find(entry => entry.id === data.id && entry.kickoff === data.kickoff);
     if (typeof data.played !== 'boolean') throw err('Choose an attendance status.');
-    row.played = data.played;
+    if (row && Date.parse(row.kickoff) <= Date.now()) {
+      row.played = data.played;
+      return;
+    }
+    const fixture = allFixtures(root).find(entry => entry.game?.kickoff === data.kickoff);
+    const player = fixture?.players.find(entry => entry.id === data.id);
+    if (!player || !started(fixture)) throw err('This game has not started.');
+    player.attended = data.played;
     return;
   }
   if (action === 'add') return add(state, clean(data.name, 40), null, true);
@@ -228,7 +261,7 @@ function manage(state, action, data) {
     return;
   }
   if (action === 'ledger-paid' && data.kickoff !== state.game.kickoff) {
-    const historical = state.ledger?.find(row => row.id === data.id && row.kickoff === data.kickoff);
+    const historical = root.ledger?.find(row => row.id === data.id && row.kickoff === data.kickoff);
     if (!historical) throw err('Payment record no longer exists.');
     historical.paid = !historical.paid;
     return;
@@ -245,7 +278,8 @@ const server = createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'");
-  const path = new URL(req.url, 'http://localhost').pathname;
+  const url = new URL(req.url, 'http://localhost');
+  const path = url.pathname;
   if (req.method === 'GET' && assets.has(path)) {
     const [asset, type] = assets.get(path);
     res.writeHead(200, { 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-cache' });
@@ -265,22 +299,32 @@ const server = createServer(async (req, res) => {
     let result;
     try {
       const original = read.get().json;
-      const state = JSON.parse(original);
-      let organiser = Boolean(session && state.sessions[session] > Date.now());
-      maintain(state);
+      const root = JSON.parse(original);
+      let organiser = Boolean(session && root.sessions[session] > Date.now());
+      maintain(root);
+      let state = root;
+      const selectedId = url.searchParams.get('fixture');
+      if (selectedId && organiser) {
+        if (!Object.hasOwn(root.fixtures || {}, selectedId) && req.method === 'POST' && data.action !== 'logout') {
+          throw err('That fixture moved to the main game. Reopen it from the fixture picker.', 409);
+        }
+        state = Object.hasOwn(root.fixtures || {}, selectedId) ? root.fixtures[selectedId] : root;
+        if (state !== root) maintain(state, false);
+      }
       const action = data.action;
       if (req.method === 'POST') {
         if (action === 'login') {
           if (typeof data.password !== 'string' || !timingSafeEqual(hash(data.password), hash(password))) throw err('Incorrect organiser password.', 401);
-          state.sessions = Object.fromEntries(Object.entries(state.sessions).filter(([, until]) => until > Date.now()).slice(-30));
+          root.sessions = Object.fromEntries(Object.entries(root.sessions).filter(([, until]) => until > Date.now()).slice(-30));
           session = token();
-          state.sessions[session] = Date.now() + 86400000;
+          root.sessions[session] = Date.now() + 86400000;
           setCookie(req, res, 'organiser', session, 86400);
           organiser = true;
         } else if (action === 'logout') {
-          delete state.sessions[session];
+          delete root.sessions[session];
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
+          state = root;
         } else if (['join', 'out', 'accept'].includes(action)) {
           if (data.kickoff && data.kickoff !== state.game?.kickoff) throw err('The fixture has changed. Refresh and try again.');
           if (!state.game || started(state)) throw err('Sign-ups are closed.');
@@ -298,12 +342,21 @@ const server = createServer(async (req, res) => {
           setCookie(req, res, 'player', identity, 31536000);
         } else {
           if (!organiser) throw err('Sign in as organiser.', 401);
-          manage(state, action, data);
+          if (action === 'create-fixture') {
+            if (!root.game) throw err('Set up the main fixture first.');
+            const fixture = { id: token(), game: null, players: [], teams: null };
+            manage(fixture, 'game', { ...data, fresh: false }, root);
+            root.fixtures ||= {};
+            root.fixtures[fixture.id] = fixture;
+            state = fixture;
+          } else {
+            manage(state, action, data, root);
+          }
         }
-        maintain(state);
+        maintain(state, state === root);
       }
-      result = view(state, organiser, identity);
-      const updated = JSON.stringify(state);
+      result = view(state, organiser, identity, root);
+      const updated = JSON.stringify(root);
       if (updated !== original) write.run(updated);
       db.exec('COMMIT');
     } catch (error) {

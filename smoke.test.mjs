@@ -36,7 +36,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   function client() {
     let cookie = '';
     return async (action, values = {}, expected = 200) => {
-      const response = await fetch(base + (action ? '/api/action' : '/api/state'), {
+      const response = await fetch(base + (action ? '/api/action' : '/api/state') + (values.fixture ? '?fixture=' + values.fixture : ''), {
         ...(action && { method: 'POST', body: JSON.stringify({ action, ...values }) }),
         headers: { cookie, 'Content-Type': 'application/json' }
       });
@@ -131,4 +131,24 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('attendance', { ...attendance, played: true });
   const corrected = await admin('undo-payment', { id });
   assert.equal(corrected.accounts.find(row => row.key === account.key).paid, 600);
+  assert.equal((await olly()).game.meetingPoint, 'eaten.tilt.linked');
+  const futureKickoff = (new Date().getUTCFullYear() + 2) + '-11-23T19:00';
+  const details = { title: 'Later game', venue: 'Main pitch', kickoff: futureKickoff, capacity: 14, cost: 8400 };
+  const scheduled = await admin('create-fixture', details);
+  const fixture = scheduled.fixtureId;
+  assert.equal(scheduled.fixtures.length, 2);
+  assert.equal(scheduled.confirmed, 0);
+  await admin('create-fixture', details, 400);
+  const added = await admin('add', { fixture, name: 'Guest Player' });
+  assert.equal(added.confirmed, 1);
+  const main = await admin();
+  assert.equal(main.confirmed, 1);
+  assert.equal(main.players.some(p => p.name === 'Guest Player'), false);
+  assert.equal(main.accounts.some(p => p.name === 'Guest Player'), true);
+  const publicState = await olly(undefined, { fixture });
+  assert.equal(publicState.fixtures, undefined);
+  assert.equal(publicState.game.kickoff, main.game.kickoff);
+  await admin('remove', { fixture, id: added.players[0].id });
+  assert.equal((await admin(undefined, { fixture })).confirmed, 0);
+  assert.equal((await admin()).confirmed, 1);
 });

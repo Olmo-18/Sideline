@@ -54,6 +54,15 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   const kickoff = (new Date().getUTCFullYear() + 1) + '-11-23T19:00';
   await admin('game', { title: 'Tuesday football', venue: 'Main pitch', kickoff, capacity: 2, cost: 1600 });
   assert.equal((await olly()).game.title, 'Tuesday Football');
+  const playerPassword = 'a-long-test-password';
+  for (const [player, name, phone] of [[olly, 'Olly Jones', '07700900001'], [robin, 'Robin Green', '07700900002'],
+    [tom, 'Tom L', '07700900003'], [ed, 'Ed Smith', '07700900004']]) {
+    await player('player-register', { name, phone, password: playerPassword });
+  }
+  const stranger = client();
+  await stranger('join', { name: 'Tom L', phone: '07700900003' }, 401);
+  await stranger('player-login', { phone: '07700900003', password: 'incorrect-password' }, 401);
+  assert.equal((await stranger()).myAccount, undefined);
   const firstSignup = await olly('join', { name: 'Olly Jones' });
   assert.equal(firstSignup.mine.status, 'playing');
   assert.equal(firstSignup.due, 600);
@@ -88,7 +97,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   assert.equal(persisted.players.find(p => p.id === guestId).paid, true);
   assert.deepEqual(persisted.teams, newest.teams);
   assert.equal((await tom()).mine.status, 'playing');
-  await ed('join', { name: 'Ed' }, 400);
+  await client()('player-register', { name: 'Ed', phone: '07700900005', password: playerPassword }, 400);
   assert.equal((await ed()).ledger, undefined);
   const previousTuesday = new Date();
   previousTuesday.setUTCDate(previousTuesday.getUTCDate() - ((previousTuesday.getUTCDay() + 5) % 7 || 7));
@@ -121,7 +130,13 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   let summary = (await admin()).accounts.find(row => row.key === account.key);
   assert.equal(summary.games, 1);
   assert.equal(summary.paid - summary.charged, 2400);
-  assert.equal(summary.payments.length, 1);
+  assert.equal(summary.payments.filter(payment => payment.id === id).length, 1);
+  const secondPhone = client();
+  const own = (await secondPhone('player-login', { phone: '+447700900003', password: playerPassword })).myAccount;
+  assert.equal(own.name, 'Tom L');
+  assert.equal(own.paid, 3000);
+  assert.equal(own.payments.find(payment => payment.amount === 2400).date !== null, true);
+  assert.equal((await olly()).myAccount.paid, 600);
   assert.equal((await tom()).accounts, undefined);
   const attendance = { id: oldTom.id, kickoff: oldTom.kickoff };
   await admin('attendance', { ...attendance, played: false });
@@ -151,4 +166,12 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('remove', { fixture, id: added.players[0].id });
   assert.equal((await admin(undefined, { fixture })).confirmed, 0);
   assert.equal((await admin()).confirmed, 1);
+  const legacy = (await admin()).accounts.find(entry => entry.name === 'Alec +1');
+  const recipient = client();
+  const enrolled = await recipient('player-register', { name: 'Alec Guest', phone: '07700900006', password: playerPassword });
+  assert.equal(enrolled.myAccount.paid, 0);
+  const target = (await admin()).accounts.find(entry => entry.phoneEnd === '0006');
+  await admin('link-player', { key: legacy.key, target: target.key, linkCode: 'wrong' }, 400);
+  await admin('link-player', { key: legacy.key, target: target.key, linkCode: enrolled.myAccount.linkCode });
+  assert.equal((await recipient()).myAccount.paid, 600);
 });

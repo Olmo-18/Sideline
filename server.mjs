@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomBytes, timingSafeEqual, createHash, randomInt } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash, randomInt, scryptSync } from 'node:crypto';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -28,6 +28,45 @@ const playing = state => state.players.filter(p => p.status === 'playing');
 const queue = state => state.players.filter(p => p.status === 'reserve');
 const started = state => Date.parse(state.game?.kickoff) <= Date.now();
 
+const attempts = new Map();
+const ukMobile = value => {
+  const number = clean(value, 32).replace(/[\s()-]/g, '').replace(/^0044/, '+44').replace(/^0/, '+44');
+  return /^\+447\d{9}$/.test(number) ? number : '';
+};
+const fullName = name => /^\p{L}.*\s+.*\p{L}/u.test(name);
+
+function playerSignIn(state, data, register) {
+  const phone = ukMobile(data.phone);
+  if (!phone || typeof data.password !== 'string' || data.password.length < 12 || data.password.length > 128) {
+    throw err('Enter a UK mobile number and a password of 12 to 128 characters.');
+  }
+  const now = Date.now();
+  for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
+  const limit = attempts.get(phone) || { count: 0, until: now + 900000 };
+  if (limit.count >= 10 || !attempts.has(phone) && attempts.size >= 500) throw err('Too many attempts. Try again in 15 minutes.', 429);
+  limit.count++;
+  attempts.set(phone, limit);
+  state.profiles ||= {};
+  let profile = Object.values(state.profiles).find(entry => entry.phone === phone);
+  if (register) {
+    const name = clean(data.name, 40);
+    if (!fullName(name)) throw err('Enter your first and last name.');
+    if (profile) throw err('This phone number already has an account. Sign in with your password.', 409);
+    if (Object.keys(state.profiles).length >= 1000) throw err('Please ask the organiser to help you register.');
+    const id = token();
+    const salt = randomBytes(16).toString('hex');
+    profile = { id, name, phone, salt, linkCode: randomBytes(6).toString('hex'), passwordHash: scryptSync(data.password, salt, 32).toString('hex') };
+    state.profiles[id] = profile;
+  } else {
+    const candidate = scryptSync(data.password, profile?.salt || 'touchline-invalid', 32);
+    if (!profile || !timingSafeEqual(candidate, Buffer.from(profile.passwordHash, 'hex'))) {
+      throw err('Phone number or password is incorrect.', 401);
+    }
+  }
+  attempts.delete(phone);
+  return profile;
+}
+
 const defaultFee = 600;
 const meetingPoint = 'eaten.tilt.linked';
 const extraFixtures = state => Object.values(state.fixtures || {});
@@ -42,7 +81,7 @@ const publicName = player => {
 function paymentRows(state) {
   if (!state.game) return [];
   return state.players.filter(p => p.status === 'playing' || p.paid).map(p => ({
-    id: p.id, name: p.name, game: state.game.title, kickoff: state.game.kickoff,
+    id: p.id, name: p.name, profileId: p.profileId, game: state.game.title, kickoff: state.game.kickoff,
     fee: fee(state), paid: p.paid, played: started(state) && (p.attended ?? (p.status === 'playing'))
   }));
 }
@@ -55,24 +94,30 @@ function allPaymentRows(state) {
 
 function playerAccounts(state) {
   const accounts = new Map();
-  const accountFor = name => {
-    const key = playerKey(name);
-    if (!accounts.has(key)) accounts.set(key, { key, name, games: 0, charged: 0, paid: 0, payments: [] });
+  const accountFor = (name, profileId) => {
+    const key = profileId ? 'player:' + profileId : playerKey(name);
+    const profile = state.profiles?.[profileId];
+    if (!accounts.has(key)) accounts.set(key, { key, name: profile?.name || name, phoneEnd: profile?.phone.slice(-4),
+      games: 0, charged: 0, paid: 0, payments: [] });
     return accounts.get(key);
   };
+  for (const profile of Object.values(state.profiles || {})) accountFor(profile.name, profile.id);
   for (const fixture of allFixtures(state)) {
-    for (const player of fixture.players) accountFor(player.name);
+    for (const player of fixture.players) accountFor(player.name, player.profileId);
   }
   for (const row of allPaymentRows(state)) {
-    const account = accountFor(row.name);
+    const account = accountFor(row.name, row.profileId);
     if (row.played !== false) {
       account.games++;
       account.charged += row.fee;
     }
-    if (row.paid) account.paid += row.fee;
+    if (row.paid) {
+      account.paid += row.fee;
+      account.payments.push({ amount: row.fee, date: null, fixtureDate: row.kickoff });
+    }
   }
   for (const payment of state.payments || []) {
-    const account = accountFor(payment.name);
+    const account = accountFor(payment.name, payment.profileId);
     account.payments.push(payment);
     account.paid += payment.amount;
   }
@@ -134,22 +179,27 @@ function maintain(state, recurring = true) {
   }
 }
 
-function view(state, organiser, identity, root = state) {
+function view(state, organiser, identity, root = state, profile) {
   const waiting = queue(state);
   const confirmed = playing(state);
   const mine = state.players.find(p => p.identity === identity);
   const cutoff = Date.parse(state.game?.kickoff);
   const teams = state.teams && state.teams.map(side => side.map(id => publicName(state.players.find(p => p.id === id))));
   const assigned = new Set(state.teams?.flat());
+  const accounts = organiser || profile ? playerAccounts(root) : [];
+  const own = profile && accounts.find(account => account.key === 'player:' + profile.id);
   return {
-    organiser, game: state.game && { ...state.game, meetingPoint }, confirmed: confirmed.length, reserves: waiting.length,
+    organiser, ...(own && { myAccount: {
+      name: own.name, linkCode: profile.linkCode, games: own.games, paid: own.paid, charged: own.charged,
+      payments: own.payments.map(({ amount, date, fixtureDate }) => ({ amount, date, fixtureDate }))
+    } }), game: state.game && { ...state.game, meetingPoint }, confirmed: confirmed.length, reserves: waiting.length,
     offered: state.players.filter(p => p.status === 'offered').length,
     due: state.game ? fee(state) : 0,
     closed: cutoff <= Date.now(),
     mine: mine && { name: mine.name, status: mine.status, until: mine.until, paid: mine.paid, position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
     players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(publicName),
-    ...(organiser && { ledger: allPaymentRows(root), accounts: playerAccounts(root), fixtureId: state.id || '',
+    ...(organiser && { ledger: allPaymentRows(root), accounts, fixtureId: state.id || '',
       fixtures: allFixtures(root).filter(fixture => fixture.game).map(fixture => ({
         id: fixture.id || '', title: fixture.game.title, kickoff: fixture.game.kickoff,
         confirmed: playing(fixture).length
@@ -174,9 +224,9 @@ async function body(req) {
   } catch { throw err('Invalid request.'); }
 }
 
-function add(state, name, identity, organiser) {
+function add(state, name, identity, organiser, profileId) {
   if (!name) throw err('Enter a name.');
-  if (!organiser && !/^\p{L}.*\s+.*\p{L}/u.test(name)) throw err('Enter your first and last name.');
+  if (!organiser && !fullName(name)) throw err('Enter your first and last name.');
   const existing = state.players.find(p => playerKey(p.name) === playerKey(name) && (!identity || p.identity !== identity));
   if (existing) throw err('That name is already on the list. Ask the organiser if that entry is yours.');
   let player = identity && state.players.find(p => p.identity === identity);
@@ -185,7 +235,7 @@ function add(state, name, identity, organiser) {
   if (state.players.length >= 150) throw err('The sign-up list is full.');
   const active = playing(state).length + state.players.filter(p => p.status === 'offered').length;
   const status = active < state.game.capacity ? 'playing' : 'reserve';
-  state.players.push({ id: player?.id || token(), name, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
+  state.players.push({ id: player?.id || token(), name, profileId, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
 }
 
 function manage(state, action, data, root = state) {
@@ -220,8 +270,29 @@ function manage(state, action, data, root = state) {
         typeof data.id !== 'string' || !/^[a-f0-9-]{36}$/.test(data.id)) throw err('Choose a player and enter a valid payment amount.');
     root.payments ||= [];
     if (!root.payments.some(payment => payment.id === data.id)) {
-      root.payments.push({ id: data.id, name: account.name, amount: data.amount, date: new Date().toISOString() });
+      root.payments.push({ id: data.id, name: account.name, profileId: account.key.startsWith('player:') ? account.key.slice(7) : undefined, amount: data.amount, date: new Date().toISOString() });
     }
+    return;
+  }
+  if (action === 'link-player') {
+    const profileId = typeof data.target === 'string' ? data.target.slice(7) : '';
+    const profile = Object.hasOwn(root.profiles || {}, profileId) && root.profiles[profileId];
+    const old = playerAccounts(root).find(account => account.key === data.key && !account.phoneEnd);
+    if (!profile || !old || data.target !== 'player:' + profile.id) throw err('Choose an existing record and a player account.');
+    if (clean(data.linkCode, 20).toLowerCase() !== profile.linkCode) throw err('Enter the linking code the player gave you.');
+    const matches = row => !row.profileId && playerKey(row.name) === old.key;
+    const fixtures = allFixtures(root);
+    if (fixtures.some(fixture => fixture.players.some(matches) && fixture.players.some(player => player.profileId === profile.id))) {
+      throw err('Both records appear in the same fixture. Remove the duplicate before linking.', 409);
+    }
+    for (const fixture of fixtures) {
+      for (const player of fixture.players.filter(matches)) {
+        player.profileId = profile.id;
+        player.identity = profile.id;
+        player.fullName = true;
+      }
+    }
+    for (const row of [...(root.ledger || []), ...(root.payments || [])].filter(matches)) row.profileId = profile.id;
     return;
   }
   if (action === 'undo-payment') {
@@ -293,6 +364,7 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && path !== '/api/state' || req.method === 'POST' && path !== '/api/action' ||
         !['GET', 'POST'].includes(req.method)) throw err('Not found.', 404);
     const data = req.method === 'POST' ? await body(req) : {};
+    const playerSession = cookie(req, 'player_session');
     let identity = cookie(req, 'player');
     let session = cookie(req, 'organiser');
     db.exec('BEGIN IMMEDIATE');
@@ -300,6 +372,9 @@ const server = createServer(async (req, res) => {
     try {
       const original = read.get().json;
       const root = JSON.parse(original);
+      const login = root.playerSessions?.[playerSession];
+      let profile = login && login.until > Date.now() ? root.profiles?.[login.profileId] : undefined;
+      if (profile) identity = profile.id;
       let organiser = Boolean(session && root.sessions[session] > Date.now());
       maintain(root);
       let state = root;
@@ -325,12 +400,36 @@ const server = createServer(async (req, res) => {
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
           state = root;
+        } else if (action === 'player-register' || action === 'player-login') {
+          profile = playerSignIn(root, data, action === 'player-register');
+          const fresh = token();
+          root.playerSessions = Object.fromEntries(Object.entries(root.playerSessions || {}).filter(([, value]) => value.until > Date.now()).slice(-3000));
+          root.playerSessions[fresh] = { profileId: profile.id, until: Date.now() + 2592000000 };
+          setCookie(req, res, 'player_session', fresh, 2592000);
+          if (identity && !login) {
+            for (const fixture of allFixtures(root)) {
+              const player = fixture.players.find(entry => entry.identity === identity && !entry.profileId && playerKey(entry.name) === playerKey(profile.name));
+              if (player && !fixture.players.some(entry => entry.profileId === profile.id)) {
+                player.identity = profile.id;
+                player.profileId = profile.id;
+              }
+            }
+          }
+          identity = profile.id;
+        } else if (action === 'player-logout') {
+          if (playerSession && root.playerSessions) delete root.playerSessions[playerSession];
+          setCookie(req, res, 'player_session', '', 0);
+          setCookie(req, res, 'player', '', 0);
+          profile = undefined;
+          identity = undefined;
         } else if (['join', 'out', 'accept'].includes(action)) {
           if (data.kickoff && data.kickoff !== state.game?.kickoff) throw err('The fixture has changed. Refresh and try again.');
           if (!state.game || started(state)) throw err('Sign-ups are closed.');
-          identity ||= token();
           const player = state.players.find(p => p.identity === identity);
-          if (action === 'join') add(state, clean(data.name, 40), identity, false);
+          if (action === 'join') {
+            if (!profile) throw err('Sign in with your mobile number to join.', 401);
+            add(state, profile.name, identity, false, profile.id);
+          }
           if (action === 'out') {
             if (!player) throw err('You have no active sign-up on this phone.');
             player.status = 'out';
@@ -339,7 +438,7 @@ const server = createServer(async (req, res) => {
             if (player?.status !== 'offered') throw err('This offer is no longer available.');
             player.status = 'playing';
           }
-          setCookie(req, res, 'player', identity, 31536000);
+
         } else {
           if (!organiser) throw err('Sign in as organiser.', 401);
           if (action === 'create-fixture') {
@@ -355,7 +454,7 @@ const server = createServer(async (req, res) => {
         }
         maintain(state, state === root);
       }
-      result = view(state, organiser, identity, root);
+      result = view(state, organiser, identity, root, profile);
       const updated = JSON.stringify(root);
       if (updated !== original) write.run(updated);
       db.exec('COMMIT');

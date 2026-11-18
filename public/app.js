@@ -43,7 +43,7 @@ async function update(data, refresh = false, selected = fixtureId) {
 }
 
 function render() {
-  const { game, organiser, confirmed, reserves, offered, mine, closed } = state;
+  const { game, organiser, confirmed, reserves, offered, mine, closed, myAccount } = state;
   organiserButton.textContent = organiser ? 'Sign out' : 'Organiser';
   organiserButton.dataset.action = organiser ? 'logout' : 'login-form';
   if (!game) {
@@ -57,19 +57,51 @@ function render() {
     mine?.status === 'offered' ? 'You have a place on offer until ' + date(mine.until) + '.' : statusLabel[mine?.status];
   const controls = closed ? '<p>Sign-ups closed</p>' :
     '<div class="actions">' +
-    (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', 'join-form') : '') +
+    (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', myAccount ? 'join' : 'join-form') : '') +
     (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') + '</div>';
   content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (fixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
     esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><a class="map-link" href="https://w3w.co/' + esc(game.meetingPoint) +
     '" target="_blank" rel="noopener noreferrer">Open map · ///' + esc(game.meetingPoint) + '</a><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong><span class="fee">' + money(state.due) + ' each</span></div>' +
     (availability ? '<p>' + esc((mine?.name ? mine.name + ' · ' : '') + availability) + '</p>' : '') +
-    controls + '</section>' +
+    controls + '</section>' + '<section class="panel"><div class="section-head"><h2>My payments</h2></div>' +
+    (myAccount ? accountDetails(myAccount) + '<details><summary>Link older records</summary><p>Give this code to the organiser privately: <code>' +
+      esc(myAccount.linkCode) + '</code></p></details>' + button('Sign out of player account', 'player-logout', 'quiet small') :
+      '<div class="actions">' + button('Player sign-in', 'player-login', 'soft small') + button('Create player account', 'player-register', 'quiet small') + '</div>') +
+    '</section>' +
     '<section class="panel"><div class="section-head"><h2>Players</h2>' +
     (organiser ? '<div class="actions">' + button('Edit fixture', 'edit', 'soft small') + button('Add player', 'add-form', 'small') + '</div>' : '') +
     '</div><p class="muted">' + reserves + ' waiting · ' + offered + ' places on offer</p>' + players() + '</section>' + teams() + payment() +
     '<div class="footer actions">' + (fixtureId ? '' : button('Copy game link', 'copy-link', 'soft small')) +
     (organiser ? button('Payment sheet', 'ledger', 'soft small') : '') + '</div>';
+}
+
+function accountDetails(account) {
+  const balance = account.charged - account.paid;
+  const payments = account.payments.slice().sort((a, b) => (b.date || b.fixtureDate).localeCompare(a.date || a.fixtureDate));
+  return '<p>' + esc(account.name) + ' · ' + account.games + ' games played · ' + money(account.paid) +
+    ' paid · <strong>' + (balance > 0 ? money(balance) + ' owed' : balance < 0 ? money(-balance) + ' credit' : 'Settled') +
+    '</strong></p>' + (payments.length ? '<details><summary>Payment history</summary><ul class="list">' +
+    payments.map(payment => '<li class="row">' + money(payment.amount) + ' · ' +
+      (payment.date ? esc(date(payment.date)) : 'Marked paid for ' + esc(date(payment.fixtureDate)) + ' · payment date unavailable') +
+      '</li>').join('') + '</ul></details>' : '');
+}
+
+function playerForm(register, joining) {
+  form(register ? 'Create player account' : 'Player sign-in',
+    (register ? '<label>Full name<input name="name" autocomplete="name" maxlength="40" required></label>' : '') +
+    '<label>UK mobile number<input type="tel" name="phone" autocomplete="tel" maxlength="32" required></label>' +
+    '<label>Password<input type="password" name="password" minlength="12" maxlength="128" autocomplete="' +
+    (register ? 'new-password' : 'current-password') + '" required></label>' +
+    '<button type="button" class="quiet small" data-action="' +
+    (register ? 'player-login' : 'player-register') + (joining ? '-join' : '') + '">' +
+    (register ? 'Already registered? Sign in' : 'Create a player account') + '</button>',
+    register ? 'Create account' : 'Sign in', async values => {
+      const ok = await update({ ...values, action: register ? 'player-register' : 'player-login' });
+      if (!ok || !joining) return ok;
+      return Boolean(state.mine && ['playing', 'reserve', 'offered'].includes(state.mine.status)) ||
+        await update({ action: 'join', kickoff: state.game?.kickoff });
+    });
 }
 
 function fixturePicker() {
@@ -178,9 +210,11 @@ document.addEventListener('click', async event => {
   const { action, id } = control.dataset;
   if (action === 'login-form') return form('Organiser sign-in', '<label>Password<input type="password" name="password" autocomplete="current-password" required></label>', 'Sign in', values => update({ ...values, action: 'login' }));
   if (action === 'edit' || action === 'new-fixture') return fixture(action === 'new-fixture');
-  if (action === 'join-form' || action === 'add-form') return form(action === 'add-form' ? 'Add player' : 'Join the game',
-    '<label>' + (action === 'join-form' ? 'Full name' : 'Player name') + '<input name="name" autocomplete="name" maxlength="40" required value="' + esc(action === 'join-form' ? state.mine?.name : '') + '"></label>',
-    action === 'add-form' ? 'Add player' : 'Confirm', values => update({ ...values, action: action === 'add-form' ? 'add' : 'join', kickoff: state.game.kickoff }));
+  if (action === 'join-form' || action === 'player-login-join') return playerForm(false, true);
+  if (action === 'player-register-join') return playerForm(true, true);
+  if (action === 'player-login' || action === 'player-register') return playerForm(action === 'player-register', false);
+  if (action === 'add-form') return form('Add player', '<label>Player name<input name="name" autocomplete="name" maxlength="40" required></label>',
+    'Add player', values => update({ ...values, action: 'add', kickoff: state.game.kickoff }));
   if (action === 'swap-form') return form('Swap players', state.teams.map((side, i) => '<label>Team ' + ['A', 'B'][i] +
     '<select name="' + ['a', 'b'][i] + '">' + side.map(player => '<option value="' + player + '">' + esc(nameFor(player)) + '</option>').join('') +
     '</select></label>').join(''), 'Swap players', values => update({ ...values, action: 'swap' }));
@@ -197,6 +231,19 @@ document.addEventListener('click', async event => {
       '<label>Amount received (£)<input type="number" name="amount" min="0.01" max="10000" step="0.01" required></label>',
       'Record payment', async values => {
         const ok = await update({ action, key: account.key, id: paymentId, amount: Math.round(Number(values.amount) * 100) });
+        if (ok) setTimeout(showLedger, 0);
+        return ok;
+      });
+  }
+  if (action === 'link-player') {
+    const account = state.accounts[Number(id)];
+    const targets = state.accounts.filter(entry => entry.phoneEnd);
+    return form('Link records for ' + esc(account.name),
+      '<p>Ask the player directly for the linking code shown under My payments. Linking gives them access to these records.</p>' +
+      '<label>Player account<select name="target" required><option value="">Choose player</option>' +
+      targets.map(entry => '<option value="' + esc(entry.key) + '">' + esc(entry.name + ' · ending ' + entry.phoneEnd) + '</option>').join('') +
+      '</select></label><label>Player’s linking code<input name="linkCode" maxlength="12" required></label>', 'Link records', async values => {
+        const ok = await update({ action, key: account.key, target: values.target, linkCode: values.linkCode });
         if (ok) setTimeout(showLedger, 0);
         return ok;
       });
@@ -225,15 +272,16 @@ function showLedger() {
   const accounts = state.accounts || [];
   const outstanding = accounts.reduce((sum, row) => sum + Math.max(0, row.charged - row.paid), 0);
   const pastGames = state.ledger.filter(row => row.kickoff !== state.game.kickoff && Date.parse(row.kickoff) <= Date.now());
-  const payments = accounts.flatMap(account => account.payments).sort((a, b) => b.date.localeCompare(a.date));
+  const payments = accounts.flatMap(account => account.payments.filter(payment => payment.id)).sort((a, b) => b.date.localeCompare(a.date));
   modal.innerHTML = '<h2 id="dialog-title">Player balances</h2><p><strong>' + money(outstanding) +
     ' outstanding</strong></p>' + (accounts.length ?
     '<div class="sheet"><table><thead><tr><th>Player</th><th>Games played</th><th>Total paid</th><th>Balance</th><th>Payment</th></tr></thead><tbody>' +
     accounts.map((row, index) => {
       const balance = row.charged - row.paid;
-      return '<tr><td>' + esc(row.name) + '</td><td>' + row.games + '</td><td>' + money(row.paid) + '</td><td>' +
+      return '<tr><td>' + esc(row.name + (row.phoneEnd ? ' · ending ' + row.phoneEnd : '')) + '</td><td>' + row.games + '</td><td>' + money(row.paid) + '</td><td>' +
         (balance > 0 ? money(balance) + ' owed' : balance < 0 ? money(-balance) + ' credit' : 'Settled') +
-        '</td><td>' + button('Record payment', 'record-payment', 'small soft', index) + '</td></tr>';
+        '</td><td>' + button('Record payment', 'record-payment', 'small soft', index) +
+        (!row.phoneEnd && accounts.some(a => a.phoneEnd) ? button('Link records', 'link-player', 'small quiet', index) : '') + '</td></tr>';
     }).join('') + '</tbody></table></div>' : '<p class="muted">Balances appear when players join.</p>') +
     (payments.length ? '<details><summary>Payment history</summary><ul class="list">' + payments.map(payment =>
       '<li class="row"><span>' + esc(payment.name) + ' · ' + money(payment.amount) + ' · ' + esc(date(payment.date)) + '</span>' +

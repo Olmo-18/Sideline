@@ -36,7 +36,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   function client() {
     let cookie = '';
     return async (action, values = {}, expected = 200) => {
-      const response = await fetch(base + (action ? '/api/action' : '/api/state') + (values.fixture ? '?fixture=' + values.fixture : values.gameLink ? '?game=' + values.gameLink : ''), {
+      const response = await fetch(base + (action ? '/api/action' : '/api/state') + (values.fixture ? '?fixture=' + values.fixture : ''), {
         ...(action && { method: 'POST', body: JSON.stringify({ action, ...values }) }),
         headers: { cookie, 'Content-Type': 'application/json' }
       });
@@ -58,9 +58,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   };
   const kickoff = tuesday(1);
   await admin('game', { title: 'Tuesday football', venue: 'Main pitch', kickoff, capacity: 2, cost: 1600 });
-  const mainGame = (await olly()).game;
-  assert.equal(mainGame.title, 'Tuesday Football');
-  assert.match(mainGame.linkId, /^[a-f0-9]{48}$/);
+  assert.equal((await olly()).game.title, 'Tuesday Football');
   const playerPassword = 'a-long-test-password';
   for (const [player, name, phone] of [[olly, 'Olly Jones', '07700900001'], [robin, 'Robin Green', '07700900002'],
     [tom, 'Tom L', '07700900003'], [ed, 'Ed Smith', '07700900004']]) {
@@ -114,8 +112,6 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
     cost: 1600, weekly: true, fee: 600
   });
   assert.equal(rolled.game.weekly, true);
-  assert.notEqual(rolled.game.linkId, mainGame.linkId);
-  await olly(undefined, { gameLink: mainGame.linkId }, 404);
   assert.notEqual(rolled.game.kickoff.slice(0, 10), previousKickoff.slice(0, 10));
   const ukTime = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit' });
   assert.match(ukTime.format(new Date(rolled.game.kickoff)), /^Tue.*19:00$/);
@@ -155,21 +151,11 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('attendance', { ...attendance, played: true });
   const corrected = await admin('undo-payment', { id });
   assert.equal(corrected.accounts.find(row => row.key === account.key).paid, 600);
-  assert.equal((await olly()).game.meetingPoint, 'eaten.tilt.linked');
   const futureKickoff = tuesday(2);
   const details = { title: 'Later game', venue: 'Main pitch', kickoff: futureKickoff, capacity: 14, cost: 8400 };
   await admin('create-fixture', { ...details, kickoff: futureKickoff.replace('19:00', '14:00') }, 400);
   const scheduled = await admin('create-fixture', details);
   const fixture = scheduled.fixtureId;
-  const gameLink = scheduled.game.linkId;
-  const linked = await olly(undefined, { gameLink });
-  assert.equal(linked.game.title, 'Later game');
-  assert.equal(linked.fixtures, undefined);
-  assert.equal((await olly()).game.kickoff, rolled.game.kickoff);
-  await olly('join', { gameLink, kickoff: linked.game.kickoff });
-  const linkedRoster = await admin(undefined, { fixture });
-  assert.equal(linkedRoster.confirmed, 1);
-  await admin('remove', { fixture, id: linkedRoster.players[0].id });
   assert.equal(scheduled.fixtures.length, 2);
   assert.equal(scheduled.confirmed, 0);
   await admin('create-fixture', details, 400);
@@ -182,7 +168,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   const publicState = await olly(undefined, { fixture });
   assert.equal(publicState.fixtures, undefined);
   assert.equal(publicState.game.kickoff, main.game.kickoff);
-  await admin('remove', { fixture, id: added.players.find(player => player.name === 'Guest Player').id });
+  await admin('remove', { fixture, id: added.players[0].id });
   assert.equal((await admin(undefined, { fixture })).confirmed, 0);
   assert.equal((await admin()).confirmed, 1);
   const legacy = (await admin()).accounts.find(entry => entry.name === 'Alec +1');

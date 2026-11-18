@@ -9,7 +9,6 @@ const button = (text, action, css = '', id = '') => '<button type="button" class
 const statusLabel = { playing: 'Playing', reserve: 'Reserve', offered: 'Place offered', out: 'Can’t play', expired: 'Offer expired' };
 let state;
 let fixtureId = '';
-let sharedGame = new URLSearchParams(location.search).get('game');
 let busy = false;
 
 function announce(message, error = false) {
@@ -22,16 +21,10 @@ async function update(data, refresh = false, selected = fixtureId) {
   if (busy) return false;
   busy = true;
   try {
-    const query = new URLSearchParams();
-    if (selected) query.set('fixture', selected);
-    if (sharedGame) query.set('game', sharedGame);
-    const response = await fetch((data ? '/api/action' : '/api/state') + (query.size ? '?' + query : ''), data && {
+    const response = await fetch((data ? '/api/action' : '/api/state') + (selected ? '?fixture=' + encodeURIComponent(selected) : ''), data && {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
     });
     const next = await response.json();
-    if (response.status === 404 && sharedGame) {
-      content.innerHTML = '<section class="panel"><h1>Game link unavailable</h1><p><a href="/">See the next game</a></p></section>';
-    }
     if (!response.ok) throw Error(next.error);
     fixtureId = next.fixtureId || '';
     if (!refresh || JSON.stringify(next) !== JSON.stringify(state)) {
@@ -67,8 +60,7 @@ function render() {
     (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', myAccount ? 'join' : 'join-form') : '') +
     (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') + '</div>';
   content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (organiser && fixtureId !== state.nextFixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
-    esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><a class="map-link" href="https://w3w.co/' + esc(game.meetingPoint) +
-    '" target="_blank" rel="noopener noreferrer">Open map · ///' + esc(game.meetingPoint) + '</a><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
+    esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong><span class="fee">' + money(state.due) + ' each</span></div>' +
     (availability ? '<p>' + esc((mine?.name ? mine.name + ' · ' : '') + availability) + '</p>' : '') +
     controls + '</section>' + '<section class="panel"><div class="section-head"><h2>My payments</h2></div>' +
@@ -79,7 +71,7 @@ function render() {
     '<section class="panel"><div class="section-head"><h2>Players</h2>' +
     (organiser ? '<div class="actions">' + button('Edit fixture', 'edit', 'soft small') + button('Add player', 'add-form', 'small') + '</div>' : '') +
     '</div><p class="muted">' + reserves + ' waiting · ' + offered + ' places on offer</p>' + players() + '</section>' + teams() + payment() +
-    '<div class="footer actions">' + (organiser ? '' : button('Copy game link', 'copy-link', 'soft small')) +
+    '<div class="footer actions">' +
     (organiser ? button('Payment sheet', 'ledger', 'soft small') : '') + '</div>';
 }
 
@@ -116,8 +108,7 @@ function fixturePicker() {
   const previous = state.fixtures[index - 1];
   const next = state.fixtures[index + 1];
   return '<section class="panel"><div class="section-head"><h2>Fixtures</h2>' +
-    '<div class="actions">' + button('Copy game link', 'copy-link', 'soft small') +
-    button('Add fixture', 'new-fixture', 'small') + '</div></div><div class="fixture-navigation">' +
+    button('Add fixture', 'new-fixture', 'small') + '</div><div class="fixture-navigation">' +
     '<button type="button" class="soft small" data-action="step-fixture" data-id="' + esc(previous?.id) +
     '" aria-label="Previous game"' + (previous ? '' : ' disabled') + '>←</button>' +
     '<label>View fixture<select id="fixture-select">' +
@@ -130,17 +121,8 @@ function fixturePicker() {
 
 document.addEventListener('change', async event => {
   if (event.target.id !== 'fixture-select') return;
-  if (!await browseFixture(event.target.value)) event.target.value = fixtureId;
+  if (!await update(undefined, false, event.target.value)) event.target.value = fixtureId;
 });
-
-async function browseFixture(selected) {
-  const oldLink = sharedGame;
-  sharedGame = null;
-  const ok = await update(undefined, false, selected);
-  if (ok && oldLink) history.replaceState(null, '', '/');
-  if (!ok) sharedGame = oldLink;
-  return ok;
-}
 
 function players() {
   if (!state.players.length) return '<p class="muted">No players have joined yet.</p>';
@@ -223,7 +205,7 @@ document.addEventListener('click', async event => {
   if (!control) return;
   const { action, id } = control.dataset;
   if (action === 'login-form') return form('Organiser sign-in', '<label>Password<input type="password" name="password" autocomplete="current-password" required></label>', 'Sign in', values => update({ ...values, action: 'login' }));
-  if (action === 'step-fixture') return browseFixture(id);
+  if (action === 'step-fixture') return update(undefined, false, id);
   if (action === 'edit' || action === 'new-fixture') return fixture(action === 'new-fixture');
   if (action === 'join-form' || action === 'player-login-join') return playerForm(false, true);
   if (action === 'player-register-join') return playerForm(true, true);
@@ -234,12 +216,7 @@ document.addEventListener('click', async event => {
     '<select name="' + ['a', 'b'][i] + '">' + side.map(player => '<option value="' + player + '">' + esc(nameFor(player)) + '</option>').join('') +
     '</select></label>').join(''), 'Swap players', values => update({ ...values, action: 'swap' }));
   if (action === 'remove-form') return form('Remove ' + esc(nameFor(id)) + '?', '', 'Remove player', () => update({ action: 'remove', id }));
-  if (action === 'copy-link') {
-    const link = new URL('/', location.origin);
-    link.searchParams.set('game', state.game.linkId);
-    return copy(link.href, 'Game link copied.');
-  }
-  if (action === 'copy-teams') return copy('*' + state.game.title + '*\n' + date(state.game.kickoff) + ' · ' + state.game.venue + '\n///' + state.game.meetingPoint + ' · https://w3w.co/' + state.game.meetingPoint + '\n\n' +
+  if (action === 'copy-teams') return copy('*' + state.game.title + '*\n' + date(state.game.kickoff) + ' · ' + state.game.venue + '\n\n' +
     sides().map((names, i) => '*Team ' + ['A', 'B'][i] + '*\n' + names.join('\n')).join('\n\n'), 'Teams copied for WhatsApp.');
   if (action === 'ledger') return showLedger();
   if (action === 'record-payment') {

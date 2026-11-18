@@ -62,7 +62,8 @@ function render() {
     '<div class="actions">' +
     (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', 'join-form') : '') +
     (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') +
-    (active && mine.smsOptedIn ? button('Turn off texts', 'sms-opt-out', 'outline small') : '') + '</div>';
+    (active && mine.smsOptedIn ? button('Turn off texts', 'sms-opt-out', 'outline small') : '') +
+    button('Sign up a ringer', 'ringer-form', 'outline') + '</div>';
   content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (organiser && fixtureId !== state.nextFixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
     esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong></div>' +
@@ -71,7 +72,18 @@ function render() {
     '<section class="panel"><div class="section-head"><h2>Players</h2>' +
     (organiser ? '<div class="actions">' + button('Edit fixture', 'edit', 'soft small') + button('Add player', 'add-form', 'small') + '</div>' : '') +
     '</div>' + (closed ? '' : '<p class="muted" aria-live="polite">' +
-      availabilityStatus(remaining, reserves, confirmed >= game.capacity) + '</p>') + players() + '</section>' + teams();
+      availabilityStatus(remaining, reserves, confirmed >= game.capacity) + '</p>') + players() + '</section>' + ringers() + teams();
+}
+
+function ringers() {
+  if (state.closed || !state.myRingers?.length) return '';
+  return '<section class="panel"><div class="section-head"><h2>Your ringers</h2></div><ul class="list">' +
+    state.myRingers.map(ringer => '<li class="row"><div><strong>' + esc(ringer.name) + '</strong><br>' +
+      '<span class="muted">' + (ringer.status === 'offered' ? 'Accept by ' + esc(date(ringer.until)) :
+        ringer.status === 'reserve' ? 'On the waiting list' : 'Confirmed') + '</span></div>' +
+      '<div class="actions">' + (ringer.status === 'offered' ? button('Accept place', 'ringer-accept', 'small', ringer.id) : '') +
+      button(ringer.status === 'offered' ? 'Decline place' : 'Cancel', 'ringer-out', 'soft small', ringer.id) +
+      '</div></li>').join('') + '</ul></section>';
 }
 
 function availabilityStatus(remaining, reserves, filled) {
@@ -179,6 +191,9 @@ document.addEventListener('click', async event => {
       '<label class="check"><input type="checkbox" name="smsConsent"> Text me about my place or waiting-list status for this game</label>' : ''),
     'Confirm', values => update({ action: 'join', name: values.name, phone: values.phone,
       smsConsent: Boolean(values.smsConsent), kickoff: state.game.kickoff }));
+  if (action === 'ringer-form') return form('Sign up a ringer',
+    '<label>Ringer’s full name<input name="name" maxlength="40" required></label>',
+    'Sign up ringer', values => update({ action: 'ringer-join', name: values.name, kickoff: state.game.kickoff }));
   if (action === 'add-form') return form('Add player', '<label>Player name<input name="name" autocomplete="name" maxlength="40" required></label>',
     'Add player', values => update({ ...values, action: 'add', kickoff: state.game.kickoff }));
   if (action === 'swap-form') return form('Swap players', state.teams.map((side, i) => '<label>Team ' + ['A', 'B'][i] +

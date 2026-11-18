@@ -240,6 +240,8 @@ function view(state, organiser, identity, root = state) {
     offered: state.players.filter(p => p.status === 'offered').length,
     closed: cutoff <= Date.now(),
     mine: mine && { name: mine.name, status: mine.status, until: mine.until, smsOptedIn: Boolean(mine.smsPhone), position: waiting.indexOf(mine) + 1 },
+    myRingers: identity ? state.players.filter(p => p.ringerFor === identity && ['playing', 'reserve', 'offered'].includes(p.status))
+      .map(({ id, name, status, until }) => ({ id, name, status, until })) : [],
     teams: organiser ? state.teams : teams,
     players: organiser ? state.players.map(({ id, name, status }) => ({ id, name, status })) : confirmed.map(publicName),
     ...(organiser && { attendance: attendanceRows(root), fixtureId: state.id || '', nextFixtureId: nextFixture(root).id || '',
@@ -267,18 +269,21 @@ async function body(req) {
   } catch { throw err('Invalid request.'); }
 }
 
-function add(state, name, identity, organiser, smsPhone) {
+function add(state, name, identity, organiser, smsPhone, ringerFor) {
   if (!name) throw err('Enter a name.');
   if (!organiser && !fullName(name)) throw err('Enter your first and last name.');
-  const existing = state.players.find(p => playerKey(p.name) === playerKey(name) && (!identity || p.identity !== identity));
-  if (existing) throw err('That name is already on the list. Ask the organiser if that entry is yours.');
-  let player = identity && state.players.find(p => p.identity === identity);
+  const key = playerKey(name);
+  const player = ringerFor ? state.players.find(p => p.ringerFor === ringerFor && playerKey(p.name) === key) :
+    identity && state.players.find(p => p.identity === identity);
+  if (state.players.some(p => p !== player && playerKey(p.name) === key)) {
+    throw err('That name is already on the list. Ask the organiser if that entry is yours.');
+  }
   if (player && ['playing', 'reserve', 'offered'].includes(player.status)) return;
   if (player) state.players.splice(state.players.indexOf(player), 1);
   if (state.players.length >= 150) throw err('The sign-up list is full.');
   const active = playing(state).length + state.players.filter(p => p.status === 'offered').length;
   const status = active < state.game.capacity ? 'playing' : 'reserve';
-  state.players.push({ id: player?.id || token(), name, fullName: !organiser, smsPhone, status, paid: player?.paid || false, identity: organiser ? null : identity });
+  state.players.push({ id: player?.id || token(), name, fullName: !organiser, smsPhone, ringerFor, status, paid: player?.paid || false, identity: organiser ? null : identity });
 }
 
 function manage(state, action, data, root = state) {
@@ -406,7 +411,7 @@ const server = createServer(async (req, res) => {
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
           state = nextFixture(root);
-        } else if (['join', 'out', 'accept', 'sms-opt-out'].includes(action)) {
+        } else if (['join', 'out', 'accept', 'sms-opt-out', 'ringer-join', 'ringer-out', 'ringer-accept'].includes(action)) {
           if (data.kickoff && data.kickoff !== state.game?.kickoff) throw err('The fixture has changed. Refresh and try again.');
           if (!state.game || started(state)) throw err('Sign-ups are closed.');
           const player = state.players.find(p => p.identity === identity);
@@ -419,6 +424,17 @@ const server = createServer(async (req, res) => {
             }
             add(state, clean(data.name, 40), identity, false, smsPhone);
             setCookie(req, res, 'player', identity, 31536000);
+          }
+          if (action === 'ringer-join') {
+            identity ||= token();
+            add(state, clean(data.name, 40), null, false, undefined, identity);
+            setCookie(req, res, 'player', identity, 31536000);
+          }
+          if (action === 'ringer-out' || action === 'ringer-accept') {
+            const ringer = identity && state.players.find(p => p.id === data.id && p.ringerFor === identity);
+            if (!ringer) throw err('You can only manage ringers signed up from this browser.', 403);
+            if (action === 'ringer-accept' && ringer.status !== 'offered') throw err('This offer is no longer available.');
+            ringer.status = action === 'ringer-out' ? 'out' : 'playing';
           }
           if (action === 'sms-opt-out' && player) delete player.smsPhone;
           if (action === 'out') {

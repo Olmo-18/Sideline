@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 test('organiser, shared roster, FIFO offers, teams and durable attendance', async t => {
   const data = mkdtempSync(join(tmpdir(), 'touchline-'));
@@ -18,8 +19,11 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
     rmSync(data, { recursive: true, force: true });
   });
   async function start() {
-    server = spawn(process.execPath, ['server.mjs'], {
-      env: { ...process.env, NODE_ENV: 'test', PORT: '0', DATA_DIR: data, ORGANISER_PASSWORD: password }
+    const stub = "globalThis.fetch = async () => new Response(null, { status: 201 });";
+    server = spawn(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(stub), 'server.mjs'], {
+      env: { ...process.env, NODE_ENV: 'test', PORT: '0', DATA_DIR: data, ORGANISER_PASSWORD: password,
+        TWILIO_ACCOUNT_SID: 'AC' + '0'.repeat(32), TWILIO_API_KEY: 'SK' + '0'.repeat(32),
+        TWILIO_API_SECRET: 'test-only', TWILIO_FROM_NUMBER: '+447700900000' }
     });
     const port = await new Promise((resolve, reject) => {
       server.once('error', reject);
@@ -62,16 +66,19 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   assert.equal((await olly()).game.title, 'Tuesday Football');
   const stranger = client();
   await stranger('join', { name: 'Ed' }, 400);
-  const firstSignup = await olly('join', { name: 'Olly Jones' });
+  await stranger('join', { name: 'Bad Number', phone: '123', smsConsent: true }, 400);
+  const firstSignup = await olly('join', { name: 'Olly Jones', phone: '07700900001', smsConsent: true });
   assert.equal(firstSignup.mine.status, 'playing');
+  assert.equal(firstSignup.mine.smsOptedIn, true);
+  assert.equal(firstSignup.mine.smsPhone, undefined);
   await stranger('join', { name: 'Olly Jones' }, 400);
   await stranger('out', { name: 'Olly Jones' }, 400);
   assert.equal((await stranger()).mine, undefined);
   assert.equal((await olly()).mine.status, 'playing');
   assert.equal((await admin('add', { name: 'Alec +1' })).confirmed, 2);
   await admin('add', { name: 'Alec +1' }, 400);
-  assert.equal((await robin('join', { name: 'Robin Green' })).mine.position, 1);
-  assert.equal((await tom('join', { name: 'Tom L' })).mine.position, 2);
+  assert.equal((await robin('join', { name: 'Robin Green', phone: '07700900002', smsConsent: true })).mine.position, 1);
+  assert.equal((await tom('join', { name: 'Tom L', phone: '07700900003', smsConsent: true })).mine.position, 2);
   const shuffled = await admin('shuffle');
   const [[a], [b]] = shuffled.teams;
   assert.deepEqual((await admin('swap', { a, b })).teams, [[b], [a]]);
@@ -80,10 +87,16 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   await olly('out');
   assert.equal((await robin()).mine.status, 'offered');
   assert.equal((await tom()).mine.position, 1);
-  assert.equal((await ed('join', { name: 'Ed Smith' })).mine.status, 'reserve');
+  assert.equal((await ed('join', { name: 'Ed Smith', phone: '07700900004' })).mine.status, 'reserve');
   await robin('out');
   assert.equal((await tom('accept')).mine.status, 'playing');
   assert.equal((await ed()).mine.position, 1);
+  assert.equal((await tom('sms-opt-out')).mine.smsOptedIn, false);
+  const outbox = new DatabaseSync(join(data, 'touchline.sqlite'), { readOnly: true });
+  assert.deepEqual(outbox.prepare('SELECT status FROM sms_outbox ORDER BY id').all().map(row => row.status),
+    ['playing', 'reserve', 'reserve', 'offered', 'offered', 'playing']);
+  assert.equal(outbox.prepare('SELECT count(*) AS count FROM sms_outbox WHERE phone = ?').get('+447700900004').count, 0);
+  outbox.close();
   const newest = await admin('shuffle');
   assert.equal(newest.unassigned, 0);
   server.kill();

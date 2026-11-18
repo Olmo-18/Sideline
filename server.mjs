@@ -14,6 +14,22 @@ db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; CREATE TABLE IF NOT 
 db.prepare('INSERT OR IGNORE INTO state VALUES (1, ?)').run(JSON.stringify({ game: null, players: [], teams: null, sessions: {} }));
 const read = db.prepare('SELECT json FROM state WHERE id=1');
 const write = db.prepare('UPDATE state SET json=? WHERE id=1');
+const { TWILIO_ACCOUNT_SID: twilioAccount, TWILIO_API_KEY: twilioKey,
+  TWILIO_API_SECRET: twilioSecret, TWILIO_FROM_NUMBER: twilioFrom } = process.env;
+const smsEnabled = /^AC[a-f0-9]{32}$/i.test(twilioAccount || '') &&
+  /^SK[a-f0-9]{32}$/i.test(twilioKey || '') && Boolean(twilioSecret) && /^\+[1-9]\d{7,14}$/.test(twilioFrom || '');
+db.exec(`CREATE TABLE IF NOT EXISTS sms_outbox (
+  id INTEGER PRIMARY KEY, phone TEXT NOT NULL, player_id TEXT NOT NULL, kickoff TEXT NOT NULL,
+  status TEXT NOT NULL, created INTEGER NOT NULL, result TEXT NOT NULL DEFAULT 'queued'
+)`);
+const enqueueSms = db.prepare('INSERT INTO sms_outbox (phone, player_id, kickoff, status, created) VALUES (?, ?, ?, ?, ?)');
+const nextSms = db.prepare(`UPDATE sms_outbox SET result='sending' WHERE id = (
+  SELECT id FROM sms_outbox WHERE result='queued' ORDER BY id LIMIT 1
+) RETURNING *`);
+const finishSms = db.prepare('UPDATE sms_outbox SET result=? WHERE id=?');
+const smsCount = db.prepare("SELECT count(*) AS count FROM sms_outbox WHERE created > ?");
+const phoneCount = db.prepare("SELECT count(*) AS count FROM sms_outbox WHERE phone = ? AND created > ?");
+const removeOldSms = db.prepare('DELETE FROM sms_outbox WHERE created < ?');
 const token = () => randomBytes(24).toString('hex');
 const hash = value => createHash('sha256').update(value).digest();
 const assets = new Map(Object.entries({ '/': ['index.html', 'text/html'], '/attendance': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] })
@@ -115,6 +131,86 @@ function maintain(state, recurring = true) {
   }
 }
 
+const smsStatus = {
+  playing: 'Your place is confirmed',
+  reserve: 'You are on the waiting list',
+  offered: 'A place has opened up. Open Touchline to accept it before your offer expires'
+};
+
+function queueNotices(before, after) {
+  if (!smsEnabled) return;
+  const previous = new Map(allFixtures(before).flatMap(fixture =>
+    fixture.players.map(player => [player.id, player.status])));
+  const now = Date.now();
+  const yesterday = now - 86400000;
+  for (const fixture of allFixtures(after)) {
+    if (!fixture.game || started(fixture)) continue;
+    for (const player of fixture.players) {
+      if (!player.smsPhone || !Object.hasOwn(smsStatus, player.status) ||
+          previous.get(player.id) === player.status) continue;
+      if (smsCount.get(yesterday).count >= 80 || phoneCount.get(player.smsPhone, yesterday).count >= 6) continue;
+      enqueueSms.run(player.smsPhone, player.id, fixture.game.kickoff, player.status, now);
+    }
+  }
+}
+
+const smsDate = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+});
+let sendingSms = false;
+async function deliverNotices() {
+  if (sendingSms) return;
+  sendingSms = true;
+  try {
+    const original = read.get().json;
+    const root = JSON.parse(original);
+    maintain(root);
+    for (const fixture of extraFixtures(root)) maintain(fixture, false);
+    const updated = JSON.stringify(root);
+    if (updated !== original) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        queueNotices(JSON.parse(original), root);
+        write.run(updated);
+        db.exec('COMMIT');
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
+    }
+    removeOldSms.run(Date.now() - 7 * 86400000);
+    const message = nextSms.get();
+    if (!message) return;
+    const fixture = allFixtures(root).find(entry => entry.game?.kickoff === message.kickoff);
+    const player = fixture?.players.find(entry => entry.id === message.player_id);
+    if (!fixture || started(fixture) || player?.smsPhone !== message.phone || player.status !== message.status) {
+      finishSms.run('cancelled', message.id);
+      return;
+    }
+    const body = 'Tuesday Football, ' + smsDate.format(new Date(message.kickoff)) + ': ' +
+      smsStatus[message.status] + '. Reply STOP to opt out.';
+    let result = 'failed';
+    try {
+      const response = await fetch('https://api.twilio.com/2010-04-01/Accounts/' + twilioAccount + '/Messages.json', {
+        method: 'POST',
+        headers: { Authorization: 'Basic ' + Buffer.from(twilioKey + ':' + twilioSecret).toString('base64') },
+        body: new URLSearchParams({ To: message.phone, From: twilioFrom, Body: body }),
+        signal: AbortSignal.timeout(10000)
+      });
+      if (response.ok) result = 'accepted';
+      else console.warn('Twilio SMS request rejected (HTTP ' + response.status + ').');
+      if (response.body) await response.body.cancel();
+    } catch {
+      console.warn('Twilio SMS delivery request could not be confirmed.');
+    }
+    finishSms.run(result, message.id);
+  } catch {
+    console.warn('Could not process the SMS queue.');
+  } finally {
+    sendingSms = false;
+  }
+}
+
 function view(state, organiser, identity, root = state) {
   const waiting = queue(state);
   const confirmed = playing(state);
@@ -124,12 +220,12 @@ function view(state, organiser, identity, root = state) {
   const assigned = new Set(state.teams?.flat());
   const game = state.game;
   return {
-    organiser,
+    organiser, smsEnabled,
     game: game && { title: game.title, venue: game.venue, kickoff: game.kickoff, capacity: game.capacity, weekly: game.weekly },
     confirmed: confirmed.length, reserves: waiting.length,
     offered: state.players.filter(p => p.status === 'offered').length,
     closed: cutoff <= Date.now(),
-    mine: mine && { name: mine.name, status: mine.status, until: mine.until, position: waiting.indexOf(mine) + 1 },
+    mine: mine && { name: mine.name, status: mine.status, until: mine.until, smsOptedIn: Boolean(mine.smsPhone), position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
     players: organiser ? state.players.map(({ id, name, status }) => ({ id, name, status })) : confirmed.map(publicName),
     ...(organiser && { attendance: attendanceRows(root), fixtureId: state.id || '', nextFixtureId: nextFixture(root).id || '',
@@ -157,7 +253,7 @@ async function body(req) {
   } catch { throw err('Invalid request.'); }
 }
 
-function add(state, name, identity, organiser) {
+function add(state, name, identity, organiser, smsPhone) {
   if (!name) throw err('Enter a name.');
   if (!organiser && !fullName(name)) throw err('Enter your first and last name.');
   const existing = state.players.find(p => playerKey(p.name) === playerKey(name) && (!identity || p.identity !== identity));
@@ -168,7 +264,7 @@ function add(state, name, identity, organiser) {
   if (state.players.length >= 150) throw err('The sign-up list is full.');
   const active = playing(state).length + state.players.filter(p => p.status === 'offered').length;
   const status = active < state.game.capacity ? 'playing' : 'reserve';
-  state.players.push({ id: player?.id || token(), name, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
+  state.players.push({ id: player?.id || token(), name, fullName: !organiser, smsPhone, status, paid: player?.paid || false, identity: organiser ? null : identity });
 }
 
 function manage(state, action, data, root = state) {
@@ -296,15 +392,21 @@ const server = createServer(async (req, res) => {
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
           state = nextFixture(root);
-        } else if (['join', 'out', 'accept'].includes(action)) {
+        } else if (['join', 'out', 'accept', 'sms-opt-out'].includes(action)) {
           if (data.kickoff && data.kickoff !== state.game?.kickoff) throw err('The fixture has changed. Refresh and try again.');
           if (!state.game || started(state)) throw err('Sign-ups are closed.');
           const player = state.players.find(p => p.identity === identity);
           if (action === 'join') {
             identity ||= token();
-            add(state, clean(data.name, 40), identity, false);
+            let smsPhone;
+            if (smsEnabled && data.smsConsent === true) {
+              smsPhone = clean(data.phone, 32).replace(/[\s()-]/g, '').replace(/^0044/, '+44').replace(/^0/, '+44');
+              if (!/^\+447\d{9}$/.test(smsPhone)) throw err('Enter a UK mobile number for text updates.');
+            }
+            add(state, clean(data.name, 40), identity, false, smsPhone);
             setCookie(req, res, 'player', identity, 31536000);
           }
+          if (action === 'sms-opt-out' && player) delete player.smsPhone;
           if (action === 'out') {
             if (!player) throw err('You have no active sign-up on this phone.');
             player.status = 'out';
@@ -331,7 +433,10 @@ const server = createServer(async (req, res) => {
       }
       result = view(state, organiser, identity, root);
       const updated = JSON.stringify(root);
-      if (updated !== original) write.run(updated);
+      if (updated !== original) {
+        if (smsEnabled) queueNotices(JSON.parse(original), root);
+        write.run(updated);
+      }
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -343,6 +448,8 @@ const server = createServer(async (req, res) => {
     json(error.status || 500, { error: error.status ? error.message : 'Something went wrong. Try again.' });
   }
 });
+if (smsEnabled) setInterval(deliverNotices, 5000).unref();
+
 server.listen(Number(process.env.PORT || 3000), '0.0.0.0', () => {
   console.log('Touchline is listening on port ' + server.address().port);
 });

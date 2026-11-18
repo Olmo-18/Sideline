@@ -60,7 +60,8 @@ function render() {
   const controls = closed ? '<p>Sign-ups closed</p>' :
     '<div class="actions">' +
     (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', 'join-form') : '') +
-    (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') + '</div>';
+    (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') +
+    (active && mine.smsOptedIn ? button('Turn off texts', 'sms-opt-out', 'outline small') : '') + '</div>';
   content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (organiser && fixtureId !== state.nextFixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
     esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong></div>' +
@@ -164,8 +165,11 @@ document.addEventListener('click', async event => {
   if (action === 'step-fixture') return update(undefined, false, id);
   if (action === 'edit' || action === 'new-fixture') return fixture(action === 'new-fixture');
   if (action === 'join-form') return form('Join the game',
-    '<label>Full name<input name="name" autocomplete="name" maxlength="40" required value="' + esc(state.mine?.name) + '"></label>',
-    'Confirm', values => update({ action: 'join', name: values.name, kickoff: state.game.kickoff }));
+    '<label>Full name<input name="name" autocomplete="name" maxlength="40" required value="' + esc(state.mine?.name) + '"></label>' +
+    (state.smsEnabled ? '<label>UK mobile number (optional)<input type="tel" name="phone" autocomplete="tel" maxlength="32"></label>' +
+      '<label class="check"><input type="checkbox" name="smsConsent"> Text me about my place or waiting-list status for this game</label>' : ''),
+    'Confirm', values => update({ action: 'join', name: values.name, phone: values.phone,
+      smsConsent: Boolean(values.smsConsent), kickoff: state.game.kickoff }));
   if (action === 'add-form') return form('Add player', '<label>Player name<input name="name" autocomplete="name" maxlength="40" required></label>',
     'Add player', values => update({ ...values, action: 'add', kickoff: state.game.kickoff }));
   if (action === 'swap-form') return form('Swap players', state.teams.map((side, i) => '<label>Team ' + ['A', 'B'][i] +

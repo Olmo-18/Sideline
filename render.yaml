@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: touchline
+    runtime: docker
+    plan: starter
+    healthCheckPath: /
+    autoDeployTrigger: checksPass
+    disk:
+      name: touchline-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: ORGANISER_PASSWORD
+        sync: false

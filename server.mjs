@@ -16,7 +16,7 @@ const read = db.prepare('SELECT json FROM state WHERE id=1');
 const write = db.prepare('UPDATE state SET json=? WHERE id=1');
 const token = () => randomBytes(24).toString('hex');
 const hash = value => createHash('sha256').update(value).digest();
-const assets = new Map(Object.entries({ '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] })
+const assets = new Map(Object.entries({ '/': ['index.html', 'text/html'], '/attendance': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] })
   .map(([url, [file, type]]) => [url, [readFileSync(new URL('./public/' + file, import.meta.url)), type]]));
 const err = (message, status = 400) => Object.assign(Error(message), { status });
 const clean = (value, limit) => typeof value === 'string' ? value.trim().slice(0, limit) : '';

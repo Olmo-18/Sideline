@@ -2,6 +2,8 @@ const content = document.querySelector('#content');
 const notice = document.querySelector('#notice');
 const modal = document.querySelector('#modal');
 const organiserButton = document.querySelector('#organiser');
+const attendancePage = location.pathname === '/attendance';
+if (attendancePage) document.title = 'Attendance sheet | Touchline';
 const date = iso => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[char]);
 const button = (text, action, css = '', id = '') => '<button type="button" class="' + css + '" data-action="' + action + '" data-id="' + id + '">' + text + '</button>';
@@ -45,6 +47,7 @@ function render() {
   const { game, organiser, confirmed, reserves, offered, mine, closed } = state;
   organiserButton.textContent = organiser ? 'Sign out' : 'Organiser';
   organiserButton.dataset.action = organiser ? 'logout' : 'login-form';
+  if (attendancePage) return renderAttendance();
   if (!game) {
     content.innerHTML = '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">Weekly football</p><h1>No game scheduled</h1><p class="venue">The next fixture will appear here.</p>' +
       (organiser ? button('Set up a game', 'edit') : '') + '</section>';
@@ -73,7 +76,7 @@ function fixturePicker() {
   const previous = state.fixtures[index - 1];
   const next = state.fixtures[index + 1];
   return '<section class="panel"><div class="section-head"><h2>Fixtures</h2>' +
-    '<div class="actions">' + button('Attendance', 'attendance-view', 'soft small') +
+    '<div class="actions">' + '<a class="attendance-link" href="/attendance">Attendance sheet</a>' +
     button('Add fixture', 'new-fixture', 'small') + '</div></div><div class="fixture-navigation">' +
     '<button type="button" class="soft small" data-action="step-fixture" data-id="' + esc(previous?.id) +
     '" aria-label="Previous game"' + (previous ? '' : ' disabled') + '>←</button>' +
@@ -171,10 +174,8 @@ document.addEventListener('click', async event => {
   if (action === 'remove-form') return form('Remove ' + esc(nameFor(id)) + '?', '', 'Remove player', () => update({ action: 'remove', id }));
   if (action === 'copy-teams') return copy('*' + state.game.title + '*\n' + date(state.game.kickoff) + ' · ' + state.game.venue + '\n\n' +
     sides().map((names, i) => '*Team ' + ['A', 'B'][i] + '*\n' + names.join('\n')).join('\n\n'), 'Teams copied for WhatsApp.');
-  if (action === 'attendance-view') return showAttendance();
   if (action === 'attendance') {
-    const ok = await update({ action, id, kickoff: control.dataset.kickoff, played: control.dataset.played === 'true' });
-    if (ok) showAttendance();
+    await update({ action, id, kickoff: control.dataset.kickoff, played: control.dataset.played === 'true' });
     return;
   }
   await update({ action, id, kickoff: state?.game?.kickoff });
@@ -184,21 +185,29 @@ update();
 setInterval(() => { if (!document.hidden && !modal.open) update(undefined, true); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !modal.open) update(undefined, true); });
 
-function showAttendance() {
+function renderAttendance() {
+  const heading = '<section class="panel"><div class="section-head"><h1 class="attendance-title">Attendance sheet</h1>' +
+    '<a href="/">Back to fixtures</a></div>';
+  if (!state.organiser) {
+    content.innerHTML = heading + '<p>Sign in as organiser to view weekly attendance.</p>' +
+      button('Organiser sign-in', 'login-form') + '</section>';
+    return;
+  }
   const fixtures = new Map();
-  for (const row of state.attendance || []) {
+  for (const row of state.attendance) {
     if (!fixtures.has(row.kickoff)) fixtures.set(row.kickoff, []);
     fixtures.get(row.kickoff).push(row);
   }
-  modal.innerHTML = '<h2 id="dialog-title">Attendance</h2>' + (fixtures.size ? [...fixtures].map(([kickoff, rows]) =>
-    '<section class="attendance-fixture"><h3>' + esc(rows[0].game + ' · ' + new Intl.DateTimeFormat('en-GB',
-      { dateStyle: 'full', timeZone: 'Europe/London' }).format(new Date(kickoff))) + '</h3><ul class="list">' +
-    rows.map(row => '<li class="row"><div><strong>' + esc(row.name) + '</strong><br><span class="muted">' +
-      (row.played ? 'Played' : 'Absent') + '</span></div><button type="button" class="soft small" data-action="attendance" data-id="' +
-      esc(row.id) + '" data-kickoff="' + esc(kickoff) + '" data-played="' + !row.played + '">' +
-      (row.played ? 'Mark absent' : 'Mark played') + '</button></li>').join('') + '</ul></section>').join('') :
-    '<p class="muted">Attendance appears at kick-off for confirmed players.</p>') +
-    '<p class="dialog-status warning" role="alert"></p><button type="button" class="soft" data-close-sheet>Close</button>';
-  modal.querySelector('[data-close-sheet]').onclick = () => modal.close();
-  if (!modal.open) modal.showModal();
+  const fullDate = new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeZone: 'Europe/London' });
+  content.innerHTML = heading + (fixtures.size ? [...fixtures].map(([kickoff, rows]) => {
+    const played = rows.filter(row => row.played).length;
+    return '<table class="attendance-table"><caption><strong>' + esc(fullDate.format(new Date(kickoff))) +
+      '</strong><span>' + esc(rows[0].game) + ' · ' + played + ' played</span></caption>' +
+      '<thead><tr><th scope="col">Player</th><th scope="col">Status</th><th scope="col">Update</th></tr></thead><tbody>' +
+      rows.map(row => '<tr><td>' + esc(row.name) + '</td><td>' + (row.played ? 'Played' : 'Absent') +
+        '</td><td><button type="button" class="soft small" data-action="attendance" data-id="' +
+        esc(row.id) + '" data-kickoff="' + esc(kickoff) + '" data-played="' + !row.played +
+        '" aria-label="' + (row.played ? 'Mark absent: ' : 'Mark played: ') + esc(row.name) + '">' +
+        (row.played ? 'Mark absent' : 'Mark played') + '</button></td></tr>').join('') + '</tbody></table>';
+  }).join('') : '<p class="muted">Attendance appears at kick-off for confirmed players.</p>') + '</section>';
 }

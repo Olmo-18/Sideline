@@ -70,10 +70,20 @@ function fixtureRows(state) {
 const playerKey = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 
 function attendanceRows(state) {
-  return [...allFixtures(state).flatMap(fixtureRows), ...(state.ledger || [])]
-    .filter(row => Date.parse(row.kickoff) <= Date.now())
-    .map(({ id, name, game, kickoff, played }) => ({ id, name, game, kickoff, played: played !== false }))
-    .sort((a, b) => b.kickoff.localeCompare(a.kickoff) || a.name.localeCompare(b.name));
+  const now = Date.now();
+  const archived = (state.ledger || []).filter(row => Date.parse(row.kickoff) <= now);
+  const live = allFixtures(state).flatMap(fixture => {
+    if (!fixture.game || Date.parse(fixture.game.kickoff) <= now) return fixtureRows(fixture);
+    return playing(fixture).map(({ id, name }) => ({
+      id, name, game: fixture.game.title, kickoff: fixture.game.kickoff, upcoming: true
+    }));
+  });
+  return [...live, ...archived]
+    .map(({ id, name, game, kickoff, played, upcoming = false }) =>
+      ({ id, name, game, kickoff, played: played !== false, upcoming }))
+    .sort((a, b) => Number(b.upcoming) - Number(a.upcoming) ||
+      (a.upcoming ? a.kickoff.localeCompare(b.kickoff) : b.kickoff.localeCompare(a.kickoff)) ||
+      a.name.localeCompare(b.name));
 }
 
 function archive(state) {

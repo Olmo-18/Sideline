@@ -213,14 +213,16 @@ function renderAttendance() {
   }
   const fullDate = new Intl.DateTimeFormat('en-GB', { dateStyle: 'full', timeZone: 'Europe/London' });
   content.innerHTML = heading + (fixtures.size ? [...fixtures].map(([kickoff, rows]) => {
-    const played = rows.filter(row => row.played).length;
+    const upcoming = rows[0].upcoming;
+    const count = rows.filter(row => row.played).length;
     return '<table class="attendance-table"><caption><strong>' + esc(fullDate.format(new Date(kickoff))) +
-      '</strong><span>' + esc(rows[0].game) + ' · ' + played + ' played</span></caption>' +
-      '<thead><tr><th scope="col">Player</th><th scope="col">Status</th><th scope="col">Update</th></tr></thead><tbody>' +
-      rows.map(row => '<tr><td>' + esc(row.name) + '</td><td>' + (row.played ? 'Played' : 'Absent') +
-        '</td><td><button type="button" class="soft small" data-action="attendance" data-id="' +
+      '</strong><span>' + esc(rows[0].game) + ' · ' + count + (upcoming ? ' confirmed' : ' played') + '</span></caption>' +
+      '<thead><tr><th scope="col">Player</th><th scope="col">Status</th>' +
+      (upcoming ? '' : '<th scope="col">Update</th>') + '</tr></thead><tbody>' +
+      rows.map(row => '<tr><td>' + esc(row.name) + '</td><td>' + (upcoming ? 'Confirmed' : row.played ? 'Played' : 'Absent') +
+        '</td>' + (upcoming ? '' : '<td><button type="button" class="soft small" data-action="attendance" data-id="' +
         esc(row.id) + '" data-kickoff="' + esc(kickoff) + '" data-played="' + !row.played +
         '" aria-label="' + (row.played ? 'Mark absent: ' : 'Mark played: ') + esc(row.name) + '">' +
-        (row.played ? 'Mark absent' : 'Mark played') + '</button></td></tr>').join('') + '</tbody></table>';
-  }).join('') : '<p class="muted">Attendance appears at kick-off for confirmed players.</p>') + '</section>';
+        (row.played ? 'Mark absent' : 'Mark played') + '</button></td>') + '</tr>').join('') + '</tbody></table>';
+  }).join('') : '<p class="muted">Confirmed players appear here as soon as they sign up.</p>') + '</section>';
 }

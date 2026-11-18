@@ -71,6 +71,7 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   assert.equal(firstSignup.mine.status, 'playing');
   assert.equal(firstSignup.mine.smsOptedIn, true);
   assert.equal(firstSignup.mine.smsPhone, undefined);
+  assert.equal((await admin()).attendance.find(row => row.name === 'Olly Jones')?.upcoming, true);
   await stranger('join', { name: 'Olly Jones' }, 400);
   await stranger('out', { name: 'Olly Jones' }, 400);
   assert.equal((await stranger()).mine, undefined);
@@ -79,17 +80,21 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   await admin('add', { name: 'Alec +1' }, 400);
   assert.equal((await robin('join', { name: 'Robin Green', phone: '07700900002', smsConsent: true })).mine.position, 1);
   assert.equal((await tom('join', { name: 'Tom L', phone: '07700900003', smsConsent: true })).mine.position, 2);
+  assert.equal((await admin()).attendance.some(row => row.name === 'Robin Green'), false);
   const shuffled = await admin('shuffle');
   const [[a], [b]] = shuffled.teams;
   assert.deepEqual((await admin('swap', { a, b })).teams, [[b], [a]]);
   assert.equal((await robin()).players.includes('Olly J.'), true);
   assert.equal((await robin()).players.every(p => typeof p === 'string'), true);
   await olly('out');
+  assert.equal((await admin()).attendance.some(row => row.name === 'Olly Jones'), false);
+  assert.equal((await admin()).attendance.some(row => row.name === 'Robin Green'), false);
   assert.equal((await robin()).mine.status, 'offered');
   assert.equal((await tom()).mine.position, 1);
   assert.equal((await ed('join', { name: 'Ed Smith', phone: '07700900004' })).mine.status, 'reserve');
   await robin('out');
   assert.equal((await tom('accept')).mine.status, 'playing');
+  assert.equal((await admin()).attendance.find(row => row.name === 'Tom L')?.upcoming, true);
   assert.equal((await ed()).mine.position, 1);
   assert.equal((await tom('sms-opt-out')).mine.smsOptedIn, false);
   const outbox = new DatabaseSync(join(data, 'touchline.sqlite'), { readOnly: true });
@@ -119,6 +124,7 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   assert.equal(rolled.confirmed, 0);
   const oldTom = rolled.attendance.find(row => row.name === 'Tom L');
   assert.equal(oldTom.played, true);
+  assert.equal(oldTom.upcoming, false);
   const attendance = { id: oldTom.id, kickoff: oldTom.kickoff };
   const absent = await admin('attendance', { ...attendance, played: false });
   assert.equal(absent.attendance.find(row => row.id === oldTom.id).played, false);

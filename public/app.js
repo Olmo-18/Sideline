@@ -54,6 +54,8 @@ function render() {
     return;
   }
   const active = ['playing', 'reserve', 'offered'].includes(mine?.status);
+  const mapLink = /\bpitch\s+3\b/i.test(game.venue) ?
+    ' <a href="https://maps.app.goo.gl/fZTzUoVrhmRoutN39" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>' : '';
   const remaining = Math.max(0, game.capacity - confirmed - offered);
   const full = remaining === 0;
   const availability = mine?.status === 'reserve' ? 'Reserve · ' + (mine.position === 1 ? 'first in line' : 'position ' + mine.position) :
@@ -65,7 +67,7 @@ function render() {
     (active && mine.smsOptedIn ? button('Turn off texts', 'sms-opt-out', 'outline small') : '') +
     button('Sign up a ringer', 'ringer-form', 'outline') + '</div>';
   content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (organiser && fixtureId !== state.nextFixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
-    esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
+    esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + mapLink + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong></div>' +
     (availability ? '<p>' + esc((mine?.name ? mine.name + ' · ' : '') + availability) + '</p>' : '') +
     controls + '</section>' +

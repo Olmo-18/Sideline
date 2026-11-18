@@ -57,7 +57,7 @@ function render() {
     '<div class="actions">' +
     (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', 'join-form') : '') +
     (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') + '</div>';
-  content.innerHTML = '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">Next game · ' + esc(date(game.kickoff)) + '</p><h1>' +
+  content.innerHTML = '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">Next game · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
     esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong><span class="fee">' + money(state.due) + ' each</span></div>' +
     (availability ? '<p>' + esc((mine?.name ? mine.name + ' · ' : '') + availability) + '</p>' : '') +
@@ -66,7 +66,7 @@ function render() {
     (organiser ? '<div class="actions">' + button('Edit fixture', 'edit', 'soft small') + button('Add player', 'add-form', 'small') + '</div>' : '') +
     '</div><p class="muted">' + reserves + ' waiting · ' + offered + ' places on offer</p>' + players() + '</section>' + teams() + payment() +
     '<div class="footer actions">' + button('Copy game link', 'copy-link', 'soft small') +
-    (organiser ? button('Set up next game', 'fresh', 'soft small') : '') + '</div>';
+    (organiser ? button('Payment sheet', 'ledger', 'soft small') + button('Set up next game', 'fresh', 'soft small') : '') + '</div>';
 }
 
 function players() {
@@ -132,15 +132,27 @@ function fixture(fresh) {
   const game = state.game;
   const parts = iso => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/London', dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)).replace(' ', 'T');
   form(fresh ? 'Set up next game' : 'Fixture details',
-    (fresh ? '<p class="warning">Saving replaces the current fixture and clears its players, teams and payment records.</p>' : '') +
+    (fresh ? '<p class="warning">Saving starts a new fixture and archives the current payment records.</p>' : '') +
     '<label>Game name<input name="title" required maxlength="80" value="' + esc(game?.title || 'Tuesday football') +
     '"></label><label>Pitch<input name="venue" required maxlength="100" value="' + esc(game?.venue) +
     '"></label><label>Kick-off (UK time)<input type="datetime-local" name="kickoff" required value="' +
     (game ? parts(fresh ? Date.parse(game.kickoff) + 7 * 86400000 : game.kickoff) : '') +
-    '"></label><div class="form-columns"><label>Places<input name="capacity" type="number" min="2" max="60" required value="' + (game?.capacity ?? 14) +
+    '"></label><label class="check"><input type="checkbox" name="weekly" ' + (game?.weekly ? 'checked' : '') + '> Repeat every Tuesday at 2 pm</label><div class="form-columns"><label>Places<input name="capacity" type="number" min="2" max="60" required value="' + (game?.capacity ?? 14) +
     '"></label><label>Pitch cost (£)<input name="cost" type="number" min="0" max="10000" step="0.01" required value="' + (game ? game.cost / 100 : 112) +
-    '"></label></div><label>Payment link or details <textarea name="payment" maxlength="300">' + esc(game?.payment) +
-    '</textarea></label>', 'Save fixture', values => update({ ...values, action: 'game', fresh, capacity: Number(values.capacity), cost: Math.round(Number(values.cost) * 100) }));
+    '"></label></div><label>Fixed fee per player (£)<input name="fee" type="number" min="0" max="1000" step="0.01" placeholder="Leave blank to split pitch cost" value="' + ((game?.fee ?? 600) / 100) + '"></label><label>Payment link or details <textarea name="payment" maxlength="300">' + esc(game?.payment) +
+    '</textarea></label>', 'Save fixture', values => update({ ...values, action: 'game', fresh, weekly: Boolean(values.weekly),
+      capacity: Number(values.capacity), cost: Math.round(Number(values.cost) * 100),
+      fee: values.fee === '' ? null : Math.round(Number(values.fee) * 100) }));
+  const repeat = modal.querySelector('[name=weekly]');
+  const kickoff = modal.querySelector('[name=kickoff]');
+  repeat.onchange = () => {
+    if (!repeat.checked) return;
+    const now = parts(new Date());
+    const chosen = new Date((kickoff.value.slice(0, 10) || now.slice(0, 10)) + 'T14:00:00Z');
+    chosen.setUTCDate(chosen.getUTCDate() + (2 - chosen.getUTCDay() + 7) % 7);
+    if (chosen.toISOString().slice(0, 16) <= now) chosen.setUTCDate(chosen.getUTCDate() + 7);
+    kickoff.value = chosen.toISOString().slice(0, 16);
+  };
 }
 
 async function copy(text, message) {
@@ -155,8 +167,8 @@ document.addEventListener('click', async event => {
   if (action === 'login-form') return form('Organiser sign-in', '<label>Password<input type="password" name="password" autocomplete="current-password" required></label>', 'Sign in', values => update({ ...values, action: 'login' }));
   if (action === 'edit' || action === 'fresh') return fixture(action === 'fresh');
   if (action === 'join-form' || action === 'add-form') return form(action === 'add-form' ? 'Add player' : 'Join the game',
-    '<label>Player name<input name="name" maxlength="40" required value="' + esc(action === 'join-form' ? state.mine?.name : '') + '"></label>',
-    action === 'add-form' ? 'Add player' : 'Confirm', values => update({ ...values, action: action === 'add-form' ? 'add' : 'join' }));
+    '<label>' + (action === 'join-form' ? 'Full name' : 'Player name') + '<input name="name" autocomplete="name" maxlength="40" required value="' + esc(action === 'join-form' ? state.mine?.name : '') + '"></label>',
+    action === 'add-form' ? 'Add player' : 'Confirm', values => update({ ...values, action: action === 'add-form' ? 'add' : 'join', kickoff: state.game.kickoff }));
   if (action === 'swap-form') return form('Swap players', state.teams.map((side, i) => '<label>Team ' + ['A', 'B'][i] +
     '<select name="' + ['a', 'b'][i] + '">' + side.map(player => '<option value="' + player + '">' + esc(nameFor(player)) + '</option>').join('') +
     '</select></label>').join(''), 'Swap players', values => update({ ...values, action: 'swap' }));
@@ -164,9 +176,50 @@ document.addEventListener('click', async event => {
   if (action === 'copy-link') return copy(location.origin, 'Game link copied.');
   if (action === 'copy-teams') return copy('*' + state.game.title + '*\n' + date(state.game.kickoff) + ' · ' + state.game.venue + '\n\n' +
     sides().map((names, i) => '*Team ' + ['A', 'B'][i] + '*\n' + names.join('\n')).join('\n\n'), 'Teams copied for WhatsApp.');
-  await update({ action, id });
+  if (action === 'ledger') return showLedger();
+  if (action === 'ledger-paid') {
+    const ok = await update({ action, id, kickoff: control.dataset.kickoff });
+    if (ok) showLedger();
+    return;
+  }
+  if (action === 'ledger-csv') return downloadLedger();
+  await update({ action, id, kickoff: state?.game?.kickoff });
 });
 
 update();
 setInterval(() => { if (!document.hidden && !modal.open) update(undefined, true); }, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !modal.open) update(undefined, true); });
+
+function showLedger() {
+  const rows = state.ledger || [];
+  const outstanding = rows.reduce((sum, row) => sum + (row.paid ? 0 : row.fee), 0);
+  modal.innerHTML = '<h2 id="dialog-title">Payment sheet</h2><p><strong>' + money(outstanding) +
+    ' outstanding</strong></p>' + (rows.length ? '<div class="sheet"><table><thead><tr><th>Player</th><th>Fixture</th><th>Owes</th><th>Payment</th></tr></thead><tbody>' +
+    rows.map(row => '<tr><td>' + esc(row.name) + '</td><td>' + esc(date(row.kickoff)) + '</td><td>' +
+      money(row.paid ? 0 : row.fee) + '</td><td><button type="button" class="soft small" data-action="ledger-paid" data-id="' + esc(row.id) +
+      '" data-kickoff="' + esc(row.kickoff) + '">' + (row.paid ? 'Paid ✓' : 'Mark paid') + '</button></td></tr>').join('') + '</tbody></table></div>' :
+    '<p class="muted">Payment records appear when players are confirmed.</p>') +
+    '<p class="dialog-status warning" role="alert"></p><div class="actions">' +
+    (rows.length ? button('Download CSV', 'ledger-csv') : '') +
+    '<button type="button" class="soft" data-close-sheet>Close</button></div>';
+  modal.querySelector('[data-close-sheet]').onclick = () => modal.close();
+  if (!modal.open) modal.showModal();
+}
+
+function downloadLedger() {
+  const field = value => {
+    let text = String(value);
+    if (/^\s*[=+@-]/.test(text) || /^[\r\n\t]/.test(text)) text = "'" + text;
+    return '"' + text.replaceAll('"', '""') + '"';
+  };
+  const csv = [['Full name','Game','Kick-off (UK time)','Fee GBP','Paid','Outstanding GBP'],
+    ...state.ledger.map(row => [row.name, row.game, date(row.kickoff), (row.fee / 100).toFixed(2),
+      row.paid ? 'Yes' : 'No', (row.paid ? 0 : row.fee / 100).toFixed(2)])]
+    .map(row => row.map(field).join(',')).join('\r\n');
+  const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'touchline-payment-sheet.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

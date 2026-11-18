@@ -25,12 +25,43 @@ const setCookie = (req, res, name, value, age) => res.appendHeader('Set-Cookie',
   name + '=' + value + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=' + age +
   (req.socket.encrypted || process.env.NODE_ENV === 'production' ? '; Secure' : ''));
 const playing = state => state.players.filter(p => p.status === 'playing');
-const label = p => p.name;
 const queue = state => state.players.filter(p => p.status === 'reserve');
 const started = state => Date.parse(state.game?.kickoff) <= Date.now();
 
+const fee = state => state.game.fee ?? Math.ceil(state.game.cost / (playing(state).length || state.game.capacity));
+const publicName = player => {
+  if (!player.fullName) return player.name;
+  const parts = player.name.split(/\s+/);
+  return parts[0] + ' ' + Array.from(parts.at(-1))[0] + '.';
+};
+
+function paymentRows(state) {
+  if (!state.game) return [];
+  return state.players.filter(p => p.status === 'playing' || p.paid).map(p => ({
+    id: p.id, name: p.name, game: state.game.title, kickoff: state.game.kickoff,
+    fee: fee(state), paid: p.paid
+  }));
+}
+
+function archive(state) {
+  state.ledger ||= [];
+  state.ledger.push(...paymentRows(state));
+  state.players = [];
+  state.teams = null;
+}
+
+function rollFixture(state) {
+  if (!state.game?.weekly || Date.now() < Date.parse(state.game.kickoff) + 7200000) return;
+  archive(state);
+  const next = new Date(state.game.kickoff);
+  do { next.setDate(next.getDate() + 7); }
+  while (next.getTime() + 7200000 <= Date.now());
+  state.game.kickoff = next.toISOString();
+}
+
 function maintain(state) {
   if (!state.game) return;
+  rollFixture(state);
   if (state.teams) {
     const eligible = new Set(playing(state).map(p => p.id));
     state.teams = state.teams.map(side => side.filter(id => eligible.has(id)));
@@ -51,16 +82,17 @@ function view(state, organiser, identity) {
   const confirmed = playing(state);
   const mine = state.players.find(p => p.identity === identity);
   const cutoff = Date.parse(state.game?.kickoff);
-  const teams = state.teams && state.teams.map(side => side.map(id => label(state.players.find(p => p.id === id))));
+  const teams = state.teams && state.teams.map(side => side.map(id => publicName(state.players.find(p => p.id === id))));
   const assigned = new Set(state.teams?.flat());
   return {
     organiser, game: state.game, confirmed: confirmed.length, reserves: waiting.length,
     offered: state.players.filter(p => p.status === 'offered').length,
-    due: state.game ? Math.ceil(state.game.cost / (confirmed.length || state.game.capacity)) : 0,
+    due: state.game ? fee(state) : 0,
     closed: cutoff <= Date.now(),
     mine: mine && { name: mine.name, status: mine.status, until: mine.until, paid: mine.paid, position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
-    players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(label),
+    players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(publicName),
+    ...(organiser && { ledger: [...paymentRows(state), ...(state.ledger || []).slice().reverse()] }),
     unassigned: confirmed.filter(p => !assigned.has(p.id)).length
   };
 }
@@ -83,6 +115,7 @@ async function body(req) {
 
 function add(state, name, identity, organiser) {
   if (!name) throw err('Enter a name.');
+  if (!organiser && !/^\p{L}.*\s+.*\p{L}/u.test(name)) throw err('Enter your first and last name.');
   const existing = state.players.find(p => p.name.toLowerCase() === name.toLowerCase() && (!identity || p.identity !== identity));
   if (existing) throw err('That name is already on the list. Ask the organiser if that entry is yours.');
   let player = identity && state.players.find(p => p.identity === identity);
@@ -91,7 +124,7 @@ function add(state, name, identity, organiser) {
   if (state.players.length >= 150) throw err('The sign-up list is full.');
   const active = playing(state).length + state.players.filter(p => p.status === 'offered').length;
   const status = active < state.game.capacity ? 'playing' : 'reserve';
-  state.players.push({ id: player?.id || token(), name, status, paid: player?.paid || false, identity: organiser ? null : identity });
+  state.players.push({ id: player?.id || token(), name, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
 }
 
 function manage(state, action, data) {
@@ -100,15 +133,20 @@ function manage(state, action, data) {
     const venue = clean(data.venue, 100);
     const kickoff = Date.parse(data.kickoff);
     const { capacity, cost } = data;
+    const fixedFee = data.fee ?? null;
+    const weekly = data.weekly === true;
+    const localKickoff = new Date(kickoff);
     if (!title || !venue || !/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(data.kickoff) ||
       !Number.isFinite(kickoff) || (!state.game || data.fresh) && kickoff <= Date.now() ||
       !Number.isInteger(capacity) || capacity < 2 || capacity > 60 ||
-      !Number.isInteger(cost) || cost < 0 || cost > 1000000) throw err('Check the fixture details.');
+      !Number.isInteger(cost) || cost < 0 || cost > 1000000 ||
+      (fixedFee !== null && (!Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000)) ||
+      (weekly && (localKickoff.getDay() !== 2 || localKickoff.getHours() !== 14 || localKickoff.getMinutes() !== 0))) throw err('Check the fixture details.');
     if (!data.fresh && capacity < playing(state).length + state.players.filter(p => p.status === 'offered').length) {
       throw err('Capacity is below the number of confirmed and offered places.');
     }
-    state.game = { title, venue, kickoff: new Date(kickoff).toISOString(), capacity, cost, payment: clean(data.payment, 300) };
-    if (data.fresh) { state.players = []; state.teams = null; }
+    if (data.fresh) archive(state);
+    state.game = { title, venue, kickoff: new Date(kickoff).toISOString(), capacity, cost, fee: fixedFee, weekly, payment: clean(data.payment, 300) };
     return;
   }
   if (!state.game) throw err('Create a fixture first.');
@@ -131,9 +169,15 @@ function manage(state, action, data) {
     [state.teams[0][a], state.teams[1][b]] = [state.teams[1][b], state.teams[0][a]];
     return;
   }
+  if (action === 'ledger-paid' && data.kickoff !== state.game.kickoff) {
+    const historical = state.ledger?.find(row => row.id === data.id && row.kickoff === data.kickoff);
+    if (!historical) throw err('Payment record no longer exists.');
+    historical.paid = !historical.paid;
+    return;
+  }
   const player = state.players.find(p => p.id === data.id);
   if (!player) throw err('Player no longer on the list.');
-  if (action === 'paid') player.paid = !player.paid;
+  if (action === 'paid' || action === 'ledger-paid') player.paid = !player.paid;
   else if (action === 'confirm' && player.status === 'offered' && !started(state)) player.status = 'playing';
   else if (action === 'remove') player.status = 'out';
   else throw err('Unknown action.', 404);
@@ -180,6 +224,7 @@ const server = createServer(async (req, res) => {
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
         } else if (['join', 'out', 'accept'].includes(action)) {
+          if (data.kickoff && data.kickoff !== state.game?.kickoff) throw err('The fixture has changed. Refresh and try again.');
           if (!state.game || started(state)) throw err('Sign-ups are closed.');
           identity ||= token();
           const player = state.players.find(p => p.identity === identity);

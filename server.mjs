@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomBytes, timingSafeEqual, createHash, randomInt, scryptSync } from 'node:crypto';
+import { randomBytes, timingSafeEqual, createHash, randomInt } from 'node:crypto';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -28,44 +28,7 @@ const playing = state => state.players.filter(p => p.status === 'playing');
 const queue = state => state.players.filter(p => p.status === 'reserve');
 const started = state => Date.parse(state.game?.kickoff) <= Date.now();
 
-const attempts = new Map();
-const ukMobile = value => {
-  const number = clean(value, 32).replace(/[\s()-]/g, '').replace(/^0044/, '+44').replace(/^0/, '+44');
-  return /^\+447\d{9}$/.test(number) ? number : '';
-};
 const fullName = name => /^\p{L}.*\s+.*\p{L}/u.test(name);
-
-function playerSignIn(state, data, register) {
-  const phone = ukMobile(data.phone);
-  if (!phone || typeof data.password !== 'string' || data.password.length < 12 || data.password.length > 128) {
-    throw err('Enter a UK mobile number and a password of 12 to 128 characters.');
-  }
-  const now = Date.now();
-  for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
-  const limit = attempts.get(phone) || { count: 0, until: now + 900000 };
-  if (limit.count >= 10 || !attempts.has(phone) && attempts.size >= 500) throw err('Too many attempts. Try again in 15 minutes.', 429);
-  limit.count++;
-  attempts.set(phone, limit);
-  state.profiles ||= {};
-  let profile = Object.values(state.profiles).find(entry => entry.phone === phone);
-  if (register) {
-    const name = clean(data.name, 40);
-    if (!fullName(name)) throw err('Enter your first and last name.');
-    if (profile) throw err('This phone number already has an account. Sign in with your password.', 409);
-    if (Object.keys(state.profiles).length >= 1000) throw err('Please ask the organiser to help you register.');
-    const id = token();
-    const salt = randomBytes(16).toString('hex');
-    profile = { id, name, phone, salt, passwordHash: scryptSync(data.password, salt, 32).toString('hex') };
-    state.profiles[id] = profile;
-  } else {
-    const candidate = scryptSync(data.password, profile?.salt || 'touchline-invalid', 32);
-    if (!profile || !timingSafeEqual(candidate, Buffer.from(profile.passwordHash, 'hex'))) {
-      throw err('Phone number or password is incorrect.', 401);
-    }
-  }
-  attempts.delete(phone);
-  return profile;
-}
 
 const defaultFee = 600;
 const extraFixtures = state => Object.values(state.fixtures || {});
@@ -152,7 +115,7 @@ function maintain(state, recurring = true) {
   }
 }
 
-function view(state, organiser, identity, root = state, profile) {
+function view(state, organiser, identity, root = state) {
   const waiting = queue(state);
   const confirmed = playing(state);
   const mine = state.players.find(p => p.identity === identity);
@@ -161,7 +124,7 @@ function view(state, organiser, identity, root = state, profile) {
   const assigned = new Set(state.teams?.flat());
   const game = state.game;
   return {
-    organiser, ...(profile && { myAccount: { name: profile.name } }),
+    organiser,
     game: game && { title: game.title, venue: game.venue, kickoff: game.kickoff, capacity: game.capacity, weekly: game.weekly },
     confirmed: confirmed.length, reserves: waiting.length,
     offered: state.players.filter(p => p.status === 'offered').length,
@@ -194,7 +157,7 @@ async function body(req) {
   } catch { throw err('Invalid request.'); }
 }
 
-function add(state, name, identity, organiser, profileId) {
+function add(state, name, identity, organiser) {
   if (!name) throw err('Enter a name.');
   if (!organiser && !fullName(name)) throw err('Enter your first and last name.');
   const existing = state.players.find(p => playerKey(p.name) === playerKey(name) && (!identity || p.identity !== identity));
@@ -205,7 +168,7 @@ function add(state, name, identity, organiser, profileId) {
   if (state.players.length >= 150) throw err('The sign-up list is full.');
   const active = playing(state).length + state.players.filter(p => p.status === 'offered').length;
   const status = active < state.game.capacity ? 'playing' : 'reserve';
-  state.players.push({ id: player?.id || token(), name, profileId, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
+  state.players.push({ id: player?.id || token(), name, fullName: !organiser, status, paid: player?.paid || false, identity: organiser ? null : identity });
 }
 
 function manage(state, action, data, root = state) {
@@ -302,9 +265,11 @@ const server = createServer(async (req, res) => {
     try {
       const original = read.get().json;
       const root = JSON.parse(original);
-      const login = root.playerSessions?.[playerSession];
-      let profile = login && login.until > Date.now() ? root.profiles?.[login.profileId] : undefined;
-      if (profile) identity = profile.id;
+      const legacySession = root.playerSessions?.[playerSession];
+      if (!identity && legacySession?.until > Date.now()) {
+        identity = legacySession.profileId;
+        setCookie(req, res, 'player', identity, 31536000);
+      }
       let organiser = Boolean(session && root.sessions[session] > Date.now());
       maintain(root);
       let state = organiser ? root : nextFixture(root);
@@ -331,35 +296,14 @@ const server = createServer(async (req, res) => {
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
           state = nextFixture(root);
-        } else if (action === 'player-register' || action === 'player-login') {
-          profile = playerSignIn(root, data, action === 'player-register');
-          const fresh = token();
-          root.playerSessions = Object.fromEntries(Object.entries(root.playerSessions || {}).filter(([, value]) => value.until > Date.now()).slice(-3000));
-          root.playerSessions[fresh] = { profileId: profile.id, until: Date.now() + 2592000000 };
-          setCookie(req, res, 'player_session', fresh, 2592000);
-          if (identity && !login) {
-            for (const fixture of allFixtures(root)) {
-              const player = fixture.players.find(entry => entry.identity === identity && !entry.profileId && playerKey(entry.name) === playerKey(profile.name));
-              if (player && !fixture.players.some(entry => entry.profileId === profile.id)) {
-                player.identity = profile.id;
-                player.profileId = profile.id;
-              }
-            }
-          }
-          identity = profile.id;
-        } else if (action === 'player-logout') {
-          if (playerSession && root.playerSessions) delete root.playerSessions[playerSession];
-          setCookie(req, res, 'player_session', '', 0);
-          setCookie(req, res, 'player', '', 0);
-          profile = undefined;
-          identity = undefined;
         } else if (['join', 'out', 'accept'].includes(action)) {
           if (data.kickoff && data.kickoff !== state.game?.kickoff) throw err('The fixture has changed. Refresh and try again.');
           if (!state.game || started(state)) throw err('Sign-ups are closed.');
           const player = state.players.find(p => p.identity === identity);
           if (action === 'join') {
-            if (!profile) throw err('Sign in with your mobile number to join.', 401);
-            add(state, profile.name, identity, false, profile.id);
+            identity ||= token();
+            add(state, clean(data.name, 40), identity, false);
+            setCookie(req, res, 'player', identity, 31536000);
           }
           if (action === 'out') {
             if (!player) throw err('You have no active sign-up on this phone.');
@@ -385,7 +329,7 @@ const server = createServer(async (req, res) => {
         }
         maintain(state, state === root);
       }
-      result = view(state, organiser, identity, root, profile);
+      result = view(state, organiser, identity, root);
       const updated = JSON.stringify(root);
       if (updated !== original) write.run(updated);
       db.exec('COMMIT');

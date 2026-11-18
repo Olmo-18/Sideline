@@ -1,6 +1,6 @@
 # Touchline
 
-Touchline is a phone-friendly organiser for a weekly football game. Players use a shared link to join, drop out or claim a reserve offer. The organiser can add guests, pick and edit teams, copy line-ups to WhatsApp and record payments.
+Touchline is a phone-friendly organiser for a weekly football game. Players use a shared link to join, drop out or claim a reserve offer. The organiser can add guests, pick and edit teams, copy line-ups to WhatsApp and track attendance.
 
 ## Deploy from GitHub
 
@@ -24,10 +24,7 @@ Open http://localhost:3000. Local records go into the ignored `data/` directory.
 ## How the weekly game works
 
 - Choose the Tuesday date for each fixture. Kick-off is fixed at 7 pm UK time. Sign-ups close at kick-off.
-- Each member signs up with a display name. Their browser remembers their sign-up. If they switch phones or clear their cookies, the organiser can update the entry for them. Add guests individually, for example `Alec +1` as a separate spot.
+- Each member signs up with their full name. Their browser remembers their sign-up. If they switch phones or clear their cookies, the organiser can update the entry for them. Add guests individually, for example `Alec +1` as a separate spot.
 - When a spot opens, the first reserve gets an in-app offer and the spot is held for up to 24 hours or until kick-off. If they decline or the offer expires, the next reserve gets the offer. Players need to reopen the link to check. The organiser can message the player in WhatsApp and confirm on their behalf.
 - Shuffle makes two randomly selected teams from confirmed players. Swap exchanges two players across the teams. Copy formats the current teams for pasting into WhatsApp.
 - **Add fixture** schedules a separate game. As organiser, use the arrows or pick a date to edit its own sign-ups and teams. Players see only the next game on the shared link. A scheduled fixture with the same kick-off as the next recurring game becomes the main fixture when the series advances, carrying over its roster and teams. For a weekly game, enable **Repeat every Tuesday at 7 pm**. The next fixture opens automatically two hours after kick-off. Open **Attendance** in the organiser’s Fixtures panel to see who played on each date. A confirmed player counts as having played at kick-off. Use **Mark absent** or **Mark played** to correct the list.
-
-
-Players create an account with their full name, UK mobile and a password (at least 12 characters). The browser remembers their sign-in for up to 30 days. UK numbers are normalised to +44 and are used for sign-in. An existing sign-up on the same browser can carry over when the player's name matches.

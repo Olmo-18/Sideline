@@ -59,17 +59,14 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   const kickoff = tuesday(1);
   await admin('game', { title: 'Tuesday football', venue: 'Main pitch', kickoff, capacity: 2, cost: 1600 });
   assert.equal((await olly()).game.title, 'Tuesday Football');
-  const playerPassword = 'a-long-test-password';
-  for (const [player, name, phone] of [[olly, 'Olly Jones', '07700900001'], [robin, 'Robin Green', '07700900002'],
-    [tom, 'Tom L', '07700900003'], [ed, 'Ed Smith', '07700900004']]) {
-    await player('player-register', { name, phone, password: playerPassword });
-  }
   const stranger = client();
-  await stranger('join', { name: 'Tom L', phone: '07700900003' }, 401);
-  await stranger('player-login', { phone: '07700900003', password: 'incorrect-password' }, 401);
-  assert.equal((await stranger()).myAccount, undefined);
+  await stranger('join', { name: 'Ed' }, 400);
   const firstSignup = await olly('join', { name: 'Olly Jones' });
   assert.equal(firstSignup.mine.status, 'playing');
+  await stranger('join', { name: 'Olly Jones' }, 400);
+  await stranger('out', { name: 'Olly Jones' }, 400);
+  assert.equal((await stranger()).mine, undefined);
+  assert.equal((await olly()).mine.status, 'playing');
   assert.equal((await admin('add', { name: 'Alec +1' })).confirmed, 2);
   await admin('add', { name: 'Alec +1' }, 400);
   assert.equal((await robin('join', { name: 'Robin Green' })).mine.position, 1);
@@ -94,7 +91,6 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   const persisted = await admin();
   assert.deepEqual(persisted.teams, newest.teams);
   assert.equal((await tom()).mine.status, 'playing');
-  await client()('player-register', { name: 'Ed', phone: '07700900005', password: playerPassword }, 400);
   const previousTuesday = new Date();
   previousTuesday.setUTCDate(previousTuesday.getUTCDate() - ((previousTuesday.getUTCDay() + 5) % 7 || 7));
   const previousKickoff = previousTuesday.toISOString().slice(0, 10) + 'T19:00';
@@ -114,13 +110,12 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   assert.equal(absent.attendance.find(row => row.id === oldTom.id).played, false);
   await admin('attendance', { ...attendance, played: true });
   const secondPhone = client();
-  const signedIn = await secondPhone('player-login', { phone: '+447700900003', password: playerPassword });
-  assert.deepEqual(signedIn.myAccount, { name: 'Tom L' });
+  const signedIn = await secondPhone();
   assert.equal(signedIn.attendance, undefined);
   assert.equal(signedIn.due, undefined);
   assert.equal(signedIn.game.payment, undefined);
   await secondPhone('attendance', { ...attendance, played: false }, 401);
-  await tom('join');
+  await tom('join', { name: 'Tom L' });
   const futureKickoff = tuesday(2);
   const details = { title: 'Later game', venue: 'Main pitch', kickoff: futureKickoff, capacity: 14, cost: 8400 };
   await admin('create-fixture', { ...details, kickoff: futureKickoff.replace('19:00', '14:00') }, 400);
@@ -141,7 +136,6 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   assert.equal((await admin(undefined, { fixture })).confirmed, 0);
   assert.equal((await admin()).confirmed, 1);
   const recipient = client();
-  await recipient('player-register', { name: 'Alec Guest', phone: '07700900006', password: playerPassword });
   const laterKickoff = tuesday(3);
   const movedMain = await admin('game', { ...details, title: 'Main game', kickoff: laterKickoff });
   assert.equal(movedMain.nextFixtureId, fixture);
@@ -149,7 +143,7 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   const playerView = await recipient();
   assert.equal(playerView.game.title, 'Later game');
   assert.equal(playerView.fixtures, undefined);
-  await recipient('join');
+  await recipient('join', { name: 'Alec Guest' });
   assert.equal((await admin(undefined, { fixture })).confirmed, 1);
   assert.equal((await admin()).players.some(player => player.name === 'Alec Guest'), false);
 });

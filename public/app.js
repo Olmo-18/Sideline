@@ -42,7 +42,7 @@ async function update(data, refresh = false, selected = fixtureId) {
 }
 
 function render() {
-  const { game, organiser, confirmed, reserves, offered, mine, closed, myAccount } = state;
+  const { game, organiser, confirmed, reserves, offered, mine, closed } = state;
   organiserButton.textContent = organiser ? 'Sign out' : 'Organiser';
   organiserButton.dataset.action = organiser ? 'logout' : 'login-form';
   if (!game) {
@@ -56,36 +56,16 @@ function render() {
     mine?.status === 'offered' ? 'You have a place on offer until ' + date(mine.until) + '.' : statusLabel[mine?.status];
   const controls = closed ? '<p>Sign-ups closed</p>' :
     '<div class="actions">' +
-    (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', myAccount ? 'join' : 'join-form') : '') +
+    (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', 'join-form') : '') +
     (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') + '</div>';
   content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (organiser && fixtureId !== state.nextFixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
     esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong></div>' +
     (availability ? '<p>' + esc((mine?.name ? mine.name + ' · ' : '') + availability) + '</p>' : '') +
-    controls + '</section>' + '<section class="panel"><div class="section-head"><h2>Player account</h2></div>' +
-    (myAccount ? '<p>' + esc(myAccount.name) + '</p>' + button('Sign out of player account', 'player-logout', 'quiet small') :
-      '<div class="actions">' + button('Player sign-in', 'player-login', 'soft small') + button('Create player account', 'player-register', 'quiet small') + '</div>') +
-    '</section>' +
+    controls + '</section>' +
     '<section class="panel"><div class="section-head"><h2>Players</h2>' +
     (organiser ? '<div class="actions">' + button('Edit fixture', 'edit', 'soft small') + button('Add player', 'add-form', 'small') + '</div>' : '') +
     '</div><p class="muted">' + reserves + ' waiting · ' + offered + ' places on offer</p>' + players() + '</section>' + teams();
-}
-
-function playerForm(register, joining) {
-  form(register ? 'Create player account' : 'Player sign-in',
-    (register ? '<label>Full name<input name="name" autocomplete="name" maxlength="40" required></label>' : '') +
-    '<label>UK mobile number<input type="tel" name="phone" autocomplete="tel" maxlength="32" required></label>' +
-    '<label>Password<input type="password" name="password" minlength="12" maxlength="128" autocomplete="' +
-    (register ? 'new-password' : 'current-password') + '" required></label>' +
-    '<button type="button" class="quiet small" data-action="' +
-    (register ? 'player-login' : 'player-register') + (joining ? '-join' : '') + '">' +
-    (register ? 'Already registered? Sign in' : 'Create a player account') + '</button>',
-    register ? 'Create account' : 'Sign in', async values => {
-      const ok = await update({ ...values, action: register ? 'player-register' : 'player-login' });
-      if (!ok || !joining) return ok;
-      return Boolean(state.mine && ['playing', 'reserve', 'offered'].includes(state.mine.status)) ||
-        await update({ action: 'join', kickoff: state.game?.kickoff });
-    });
 }
 
 function fixturePicker() {
@@ -180,9 +160,9 @@ document.addEventListener('click', async event => {
   if (action === 'login-form') return form('Organiser sign-in', '<label>Password<input type="password" name="password" autocomplete="current-password" required></label>', 'Sign in', values => update({ ...values, action: 'login' }));
   if (action === 'step-fixture') return update(undefined, false, id);
   if (action === 'edit' || action === 'new-fixture') return fixture(action === 'new-fixture');
-  if (action === 'join-form' || action === 'player-login-join') return playerForm(false, true);
-  if (action === 'player-register-join') return playerForm(true, true);
-  if (action === 'player-login' || action === 'player-register') return playerForm(action === 'player-register', false);
+  if (action === 'join-form') return form('Join the game',
+    '<label>Full name<input name="name" autocomplete="name" maxlength="40" required value="' + esc(state.mine?.name) + '"></label>',
+    'Confirm', values => update({ action: 'join', name: values.name, kickoff: state.game.kickoff }));
   if (action === 'add-form') return form('Add player', '<label>Player name<input name="name" autocomplete="name" maxlength="40" required></label>',
     'Add player', values => update({ ...values, action: 'add', kickoff: state.game.kickoff }));
   if (action === 'swap-form') return form('Swap players', state.teams.map((side, i) => '<label>Team ' + ['A', 'B'][i] +

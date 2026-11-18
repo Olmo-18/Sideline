@@ -59,7 +59,7 @@ function render() {
     '<div class="actions">' +
     (mine?.status === 'offered' ? button('Accept place', 'accept') : !active ? button(full ? 'Join reserve list' : 'I’m in', myAccount ? 'join' : 'join-form') : '') +
     (active ? button(mine.status === 'offered' ? 'Decline place' : 'Can’t play', 'out', 'outline') : '') + '</div>';
-  content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (fixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
+  content.innerHTML = (organiser ? fixturePicker() : '') + '<section class="hero"><div class="pitch" aria-hidden="true"></div><p class="eyebrow">' + (organiser && fixtureId !== state.nextFixtureId ? 'Fixture' : 'Next game') + ' · ' + esc(date(game.kickoff)) + (game.weekly ? ' · Weekly' : '') + '</p><h1>' +
     esc(game.title) + '</h1><p class="venue">' + esc(game.venue) + '</p><a class="map-link" href="https://w3w.co/' + esc(game.meetingPoint) +
     '" target="_blank" rel="noopener noreferrer">Open map · ///' + esc(game.meetingPoint) + '</a><progress aria-label="Places filled" value="' + confirmed + '" max="' + game.capacity +
     '"></progress><div class="summary"><strong>' + confirmed + ' of ' + game.capacity + ' places filled</strong><span class="fee">' + money(state.due) + ' each</span></div>' +
@@ -105,11 +105,19 @@ function playerForm(register, joining) {
 }
 
 function fixturePicker() {
+  const index = state.fixtures.findIndex(fixture => fixture.id === fixtureId);
+  const previous = state.fixtures[index - 1];
+  const next = state.fixtures[index + 1];
   return '<section class="panel"><div class="section-head"><h2>Fixtures</h2>' +
-    button('Add fixture', 'new-fixture', 'small') + '</div><label>View fixture<select id="fixture-select">' +
+    button('Add fixture', 'new-fixture', 'small') + '</div><div class="fixture-navigation">' +
+    '<button type="button" class="soft small" data-action="step-fixture" data-id="' + esc(previous?.id) +
+    '" aria-label="Previous game"' + (previous ? '' : ' disabled') + '>←</button>' +
+    '<label>View fixture<select id="fixture-select">' +
     state.fixtures.map(fixture => '<option value="' + esc(fixture.id) + '"' +
       (fixtureId === fixture.id ? ' selected' : '') + '>' + esc(date(fixture.kickoff) + ' · ' + fixture.title +
-      ' · ' + fixture.confirmed + ' confirmed') + '</option>').join('') + '</select></label></section>';
+      ' · ' + fixture.confirmed + ' confirmed') + '</option>').join('') + '</select></label>' +
+    '<button type="button" class="soft small" data-action="step-fixture" data-id="' + esc(next?.id) +
+    '" aria-label="Next game"' + (next ? '' : ' disabled') + '>→</button></div></section>';
 }
 
 document.addEventListener('change', async event => {
@@ -209,6 +217,7 @@ document.addEventListener('click', async event => {
   if (!control) return;
   const { action, id } = control.dataset;
   if (action === 'login-form') return form('Organiser sign-in', '<label>Password<input type="password" name="password" autocomplete="current-password" required></label>', 'Sign in', values => update({ ...values, action: 'login' }));
+  if (action === 'step-fixture') return update(undefined, false, id);
   if (action === 'edit' || action === 'new-fixture') return fixture(action === 'new-fixture');
   if (action === 'join-form' || action === 'player-login-join') return playerForm(false, true);
   if (action === 'player-register-join') return playerForm(true, true);

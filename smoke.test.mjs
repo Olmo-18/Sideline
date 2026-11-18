@@ -174,4 +174,14 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('link-player', { key: legacy.key, target: target.key, linkCode: 'wrong' }, 400);
   await admin('link-player', { key: legacy.key, target: target.key, linkCode: enrolled.myAccount.linkCode });
   assert.equal((await recipient()).myAccount.paid, 600);
+  const laterKickoff = (new Date().getUTCFullYear() + 3) + '-11-23T19:00';
+  const movedMain = await admin('game', { ...details, title: 'Main game', kickoff: laterKickoff });
+  assert.equal(movedMain.nextFixtureId, fixture);
+  assert.equal(movedMain.fixtures[0].id, fixture);
+  const playerView = await recipient();
+  assert.equal(playerView.game.title, 'Later game');
+  assert.equal(playerView.fixtures, undefined);
+  await recipient('join');
+  assert.equal((await admin(undefined, { fixture })).confirmed, 1);
+  assert.equal((await admin()).players.some(player => player.name === 'Alec Guest'), false);
 });

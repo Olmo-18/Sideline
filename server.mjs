@@ -71,6 +71,9 @@ const defaultFee = 600;
 const meetingPoint = 'eaten.tilt.linked';
 const extraFixtures = state => Object.values(state.fixtures || {});
 const allFixtures = state => [state, ...extraFixtures(state)];
+const nextFixture = state => allFixtures(state).filter(fixture =>
+  fixture.game && Date.parse(fixture.game.kickoff) + 7200000 > Date.now())
+  .sort((a, b) => a.game.kickoff.localeCompare(b.game.kickoff))[0] || state;
 const fee = state => state.game.fee ?? defaultFee;
 const publicName = player => {
   if (!player.fullName) return player.name;
@@ -199,7 +202,7 @@ function view(state, organiser, identity, root = state, profile) {
     mine: mine && { name: mine.name, status: mine.status, until: mine.until, paid: mine.paid, position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
     players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(publicName),
-    ...(organiser && { ledger: allPaymentRows(root), accounts, fixtureId: state.id || '',
+    ...(organiser && { ledger: allPaymentRows(root), accounts, fixtureId: state.id || '', nextFixtureId: nextFixture(root).id || '',
       fixtures: allFixtures(root).filter(fixture => fixture.game).map(fixture => ({
         id: fixture.id || '', title: fixture.game.title, kickoff: fixture.game.kickoff,
         confirmed: playing(fixture).length
@@ -377,15 +380,15 @@ const server = createServer(async (req, res) => {
       if (profile) identity = profile.id;
       let organiser = Boolean(session && root.sessions[session] > Date.now());
       maintain(root);
-      let state = root;
+      let state = organiser ? root : nextFixture(root);
       const selectedId = url.searchParams.get('fixture');
       if (selectedId && organiser) {
         if (!Object.hasOwn(root.fixtures || {}, selectedId) && req.method === 'POST' && data.action !== 'logout') {
           throw err('That fixture moved to the main game. Reopen it from the fixture picker.', 409);
         }
         state = Object.hasOwn(root.fixtures || {}, selectedId) ? root.fixtures[selectedId] : root;
-        if (state !== root) maintain(state, false);
       }
+      if (state !== root) maintain(state, false);
       const action = data.action;
       if (req.method === 'POST') {
         if (action === 'login') {
@@ -395,11 +398,12 @@ const server = createServer(async (req, res) => {
           root.sessions[session] = Date.now() + 86400000;
           setCookie(req, res, 'organiser', session, 86400);
           organiser = true;
+          state = root;
         } else if (action === 'logout') {
           delete root.sessions[session];
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
-          state = root;
+          state = nextFixture(root);
         } else if (action === 'player-register' || action === 'player-login') {
           profile = playerSignIn(root, data, action === 'player-register');
           const fresh = token();

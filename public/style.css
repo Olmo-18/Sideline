@@ -3,3 +3,4 @@
 @media(max-width:520px){.row{align-items:flex-start}.row .actions{justify-content:flex-end}.row .small{padding:.4rem;font-size:.77rem}.pitch{right:-190px}.hero{margin-top:16px}}
 .check{display:flex;align-items:center;gap:8px;min-height:44px}.check input{width:auto}.sheet{overflow-x:auto;margin:12px 0}.sheet table{width:100%;border-collapse:collapse}.sheet th,.sheet td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.sheet th{font-size:.83rem}.sheet td{font-size:.9rem}
 .map-link{display:inline-block;color:var(--lime);margin:0 0 14px;text-underline-offset:3px}
+.fixture-navigation{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:end;gap:8px}.fixture-navigation button{min-width:44px}.fixture-navigation label{min-width:0}

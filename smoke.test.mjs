@@ -52,6 +52,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('login', { password });
   const kickoff = (new Date().getUTCFullYear() + 1) + '-11-23T19:00';
   await admin('game', { title: 'Tuesday football', venue: 'Main pitch', kickoff, capacity: 2, cost: 1600 });
+  assert.equal((await olly()).game.title, 'Tuesday Football');
   const firstSignup = await olly('join', { name: 'Olly Jones' });
   assert.equal(firstSignup.mine.status, 'playing');
   assert.equal(firstSignup.due, 600);

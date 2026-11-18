@@ -62,6 +62,7 @@ function rollFixture(state) {
 
 function maintain(state) {
   if (!state.game) return;
+  if (state.game.title === 'Tuesday football') state.game.title = 'Tuesday Football';
   rollFixture(state);
   if (state.teams) {
     const eligible = new Set(playing(state).map(p => p.id));

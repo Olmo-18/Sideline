@@ -133,7 +133,7 @@ function fixture(fresh) {
   const parts = iso => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/London', dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)).replace(' ', 'T');
   form(fresh ? 'Set up next game' : 'Fixture details',
     (fresh ? '<p class="warning">Saving starts a new fixture and archives the current payment records.</p>' : '') +
-    '<label>Game name<input name="title" required maxlength="80" value="' + esc(game?.title || 'Tuesday football') +
+    '<label>Game name<input name="title" required maxlength="80" value="' + esc(game?.title || 'Tuesday Football') +
     '"></label><label>Pitch<input name="venue" required maxlength="100" value="' + esc(game?.venue) +
     '"></label><label>Kick-off (UK time)<input type="datetime-local" name="kickoff" required value="' +
     (game ? parts(fresh ? Date.parse(game.kickoff) + 7 * 86400000 : game.kickoff) : '') +

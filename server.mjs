@@ -145,6 +145,7 @@ function rollFixture(state) {
   } else {
     if (now < next.getTime() + 7200000) return;
     archive(state);
+    state.game.linkId = token();
     next.setHours(weeklyKickoffHour, 0, 0, 0);
     do { next.setDate(next.getDate() + 7); }
     while (next.getTime() + 7200000 <= now);
@@ -153,7 +154,7 @@ function rollFixture(state) {
   if (now >= Date.parse(state.game.kickoff) + 7200000) {
     const planned = extraFixtures(state).find(fixture => fixture.game.kickoff === kickoff);
     if (planned) {
-      state.game = { ...planned.game, weekly: true };
+      state.game = { ...planned.game, linkId: planned.game.linkId || planned.id, weekly: true };
       state.players = planned.players;
       state.teams = planned.teams;
       delete state.fixtures[planned.id];
@@ -167,6 +168,7 @@ function maintain(state, recurring = true) {
   if (!state.game) return;
   if (state.game.title === 'Tuesday football') state.game.title = 'Tuesday Football';
   if (recurring) rollFixture(state);
+  state.game.linkId ||= state.id || token();
   if (state.teams) {
     const eligible = new Set(playing(state).map(p => p.id));
     state.teams = state.teams.map(side => side.filter(id => eligible.has(id)));
@@ -263,8 +265,9 @@ function manage(state, action, data, root = state) {
     if (allFixtures(root).some(fixture => fixture !== state && fixture.game?.kickoff === new Date(kickoff).toISOString())) {
       throw err('A fixture already exists at that kick-off time.');
     }
+    const linkId = !data.fresh && state.game?.linkId || state.id || token();
     if (data.fresh) archive(state);
-    state.game = { title, venue, kickoff: new Date(kickoff).toISOString(), capacity, cost, fee: fixedFee, weekly, payment: clean(data.payment, 300) };
+    state.game = { linkId, title, venue, kickoff: new Date(kickoff).toISOString(), capacity, cost, fee: fixedFee, weekly, payment: clean(data.payment, 300) };
     return;
   }
   if (!state.game) throw err('Create a fixture first.');
@@ -381,7 +384,11 @@ const server = createServer(async (req, res) => {
       if (profile) identity = profile.id;
       let organiser = Boolean(session && root.sessions[session] > Date.now());
       maintain(root);
-      let state = organiser ? root : nextFixture(root);
+      const gameLink = url.searchParams.get('game');
+      const linked = gameLink && allFixtures(root).find(fixture => fixture.game &&
+        (fixture.game.linkId || fixture.id) === gameLink);
+      if (gameLink && !linked) throw err('This game link is no longer available.', 404);
+      let state = linked || (organiser ? root : nextFixture(root));
       const selectedId = url.searchParams.get('fixture');
       if (selectedId && organiser) {
         if (!Object.hasOwn(root.fixtures || {}, selectedId) && req.method === 'POST' && data.action !== 'logout') {
@@ -399,12 +406,12 @@ const server = createServer(async (req, res) => {
           root.sessions[session] = Date.now() + 86400000;
           setCookie(req, res, 'organiser', session, 86400);
           organiser = true;
-          state = root;
+          state = linked || root;
         } else if (action === 'logout') {
           delete root.sessions[session];
           setCookie(req, res, 'organiser', '', 0);
           organiser = false;
-          state = nextFixture(root);
+          state = linked || nextFixture(root);
         } else if (action === 'player-register' || action === 'player-login') {
           profile = playerSignIn(root, data, action === 'player-register');
           const fresh = token();

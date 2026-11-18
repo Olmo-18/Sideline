@@ -82,7 +82,7 @@ function attendanceRows(state) {
   const rows = [...live, ...archived].sort((a, b) => a.kickoff.localeCompare(b.kickoff));
   return rows.map(({ id, name, game, kickoff, played = true, upcoming = false }) => {
     const key = playerKey(name);
-    const cumulativeGames = (totals.get(key) || 0) + Number(played && !upcoming);
+    const cumulativeGames = (totals.get(key) || 0) + Number(played);
     totals.set(key, cumulativeGames);
     return { id, name, game, kickoff, played, upcoming, cumulativeGames };
   }).sort((a, b) => Number(b.upcoming) - Number(a.upcoming) ||

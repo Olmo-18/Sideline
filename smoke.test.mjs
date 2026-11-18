@@ -173,8 +173,9 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   const history = await admin('game', { ...details, fixture, kickoff: olderKickoff });
   const earlierTom = history.attendance.find(row => row.name === 'tom  l');
   assert.equal(earlierTom.cumulativeGames, 1);
+  assert.equal(history.attendance.find(row => row.name === 'Alec Guest').cumulativeGames, 1);
   assert.equal(history.attendance.find(row => row.id === oldTom.id).cumulativeGames, 2);
-  assert.equal(history.attendance.find(row => row.name === 'Tom L' && row.upcoming).cumulativeGames, 2);
+  assert.equal(history.attendance.find(row => row.name === 'Tom L' && row.upcoming).cumulativeGames, 3);
   const corrected = await admin('attendance', { id: earlierTom.id, kickoff: earlierTom.kickoff, played: false });
   assert.equal(corrected.attendance.find(row => row.id === earlierTom.id).cumulativeGames, 0);
   assert.equal(corrected.attendance.find(row => row.id === oldTom.id).cumulativeGames, 1);

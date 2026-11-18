@@ -47,6 +47,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   }
   const admin = client(), olly = client(), robin = client(), tom = client(), ed = client();
   assert.equal((await fetch(base)).status, 200);
+  assert.equal((await fetch(base + '/?game=old')).status, 410);
   assert.equal((await olly()).game, null);
   await olly('add', { name: 'Unauthorized' }, 401);
   await admin('login', { password: 'wrong' }, 401);

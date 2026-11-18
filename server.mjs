@@ -354,6 +354,10 @@ const server = createServer(async (req, res) => {
   res.setHeader('Content-Security-Policy', "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'");
   const url = new URL(req.url, 'http://localhost');
   const path = url.pathname;
+  if (req.method === 'GET' && path === '/' && url.searchParams.has('game')) {
+    res.writeHead(410, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end('This fixture link has been retired. Open the Touchline home page for the next game.');
+  }
   if (req.method === 'GET' && assets.has(path)) {
     const [asset, type] = assets.get(path);
     res.writeHead(200, { 'Content-Type': type + '; charset=utf-8', 'Cache-Control': 'no-cache' });

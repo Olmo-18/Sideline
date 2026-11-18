@@ -55,7 +55,7 @@ function playerSignIn(state, data, register) {
     if (Object.keys(state.profiles).length >= 1000) throw err('Please ask the organiser to help you register.');
     const id = token();
     const salt = randomBytes(16).toString('hex');
-    profile = { id, name, phone, salt, linkCode: randomBytes(6).toString('hex'), passwordHash: scryptSync(data.password, salt, 32).toString('hex') };
+    profile = { id, name, phone, salt, passwordHash: scryptSync(data.password, salt, 32).toString('hex') };
     state.profiles[id] = profile;
   } else {
     const candidate = scryptSync(data.password, profile?.salt || 'touchline-invalid', 32);
@@ -80,7 +80,7 @@ const publicName = player => {
   return parts[0] + ' ' + Array.from(parts.at(-1))[0] + '.';
 };
 
-function paymentRows(state) {
+function fixtureRows(state) {
   if (!state.game) return [];
   return state.players.filter(p => p.status === 'playing' || p.paid).map(p => ({
     id: p.id, name: p.name, profileId: p.profileId, game: state.game.title, kickoff: state.game.kickoff,
@@ -90,45 +90,16 @@ function paymentRows(state) {
 
 const playerKey = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 
-function allPaymentRows(state) {
-  return [...allFixtures(state).flatMap(paymentRows), ...(state.ledger || []).slice().reverse()];
-}
-
-function playerAccounts(state) {
-  const accounts = new Map();
-  const accountFor = (name, profileId) => {
-    const key = profileId ? 'player:' + profileId : playerKey(name);
-    const profile = state.profiles?.[profileId];
-    if (!accounts.has(key)) accounts.set(key, { key, name: profile?.name || name, phoneEnd: profile?.phone.slice(-4),
-      games: 0, charged: 0, paid: 0, payments: [] });
-    return accounts.get(key);
-  };
-  for (const profile of Object.values(state.profiles || {})) accountFor(profile.name, profile.id);
-  for (const fixture of allFixtures(state)) {
-    for (const player of fixture.players) accountFor(player.name, player.profileId);
-  }
-  for (const row of allPaymentRows(state)) {
-    const account = accountFor(row.name, row.profileId);
-    if (row.played !== false) {
-      account.games++;
-      account.charged += row.fee;
-    }
-    if (row.paid) {
-      account.paid += row.fee;
-      account.payments.push({ amount: row.fee, date: null, fixtureDate: row.kickoff });
-    }
-  }
-  for (const payment of state.payments || []) {
-    const account = accountFor(payment.name, payment.profileId);
-    account.payments.push(payment);
-    account.paid += payment.amount;
-  }
-  return [...accounts.values()].sort((a, b) => a.name.localeCompare(b.name));
+function attendanceRows(state) {
+  return [...allFixtures(state).flatMap(fixtureRows), ...(state.ledger || [])]
+    .filter(row => Date.parse(row.kickoff) <= Date.now())
+    .map(({ id, name, game, kickoff, played }) => ({ id, name, game, kickoff, played: played !== false }))
+    .sort((a, b) => b.kickoff.localeCompare(a.kickoff) || a.name.localeCompare(b.name));
 }
 
 function archive(state) {
   state.ledger ||= [];
-  state.ledger.push(...paymentRows(state));
+  state.ledger.push(...fixtureRows(state));
   state.players = [];
   state.teams = null;
 }
@@ -188,20 +159,17 @@ function view(state, organiser, identity, root = state, profile) {
   const cutoff = Date.parse(state.game?.kickoff);
   const teams = state.teams && state.teams.map(side => side.map(id => publicName(state.players.find(p => p.id === id))));
   const assigned = new Set(state.teams?.flat());
-  const accounts = organiser || profile ? playerAccounts(root) : [];
-  const own = profile && accounts.find(account => account.key === 'player:' + profile.id);
+  const game = state.game;
   return {
-    organiser, ...(own && { myAccount: {
-      name: own.name, linkCode: profile.linkCode, games: own.games, paid: own.paid, charged: own.charged,
-      payments: own.payments.map(({ amount, date, fixtureDate }) => ({ amount, date, fixtureDate }))
-    } }), game: state.game, confirmed: confirmed.length, reserves: waiting.length,
+    organiser, ...(profile && { myAccount: { name: profile.name } }),
+    game: game && { title: game.title, venue: game.venue, kickoff: game.kickoff, capacity: game.capacity, weekly: game.weekly },
+    confirmed: confirmed.length, reserves: waiting.length,
     offered: state.players.filter(p => p.status === 'offered').length,
-    due: state.game ? fee(state) : 0,
     closed: cutoff <= Date.now(),
-    mine: mine && { name: mine.name, status: mine.status, until: mine.until, paid: mine.paid, position: waiting.indexOf(mine) + 1 },
+    mine: mine && { name: mine.name, status: mine.status, until: mine.until, position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
-    players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(publicName),
-    ...(organiser && { ledger: allPaymentRows(root), accounts, fixtureId: state.id || '', nextFixtureId: nextFixture(root).id || '',
+    players: organiser ? state.players.map(({ id, name, status }) => ({ id, name, status })) : confirmed.map(publicName),
+    ...(organiser && { attendance: attendanceRows(root), fixtureId: state.id || '', nextFixtureId: nextFixture(root).id || '',
       fixtures: allFixtures(root).filter(fixture => fixture.game).map(fixture => ({
         id: fixture.id || '', title: fixture.game.title, kickoff: fixture.game.kickoff,
         confirmed: playing(fixture).length
@@ -245,15 +213,12 @@ function manage(state, action, data, root = state) {
     const title = clean(data.title, 80);
     const venue = clean(data.venue, 100);
     const kickoff = Date.parse(data.kickoff);
-    const { capacity, cost } = data;
-    const fixedFee = data.fee ?? defaultFee;
+    const { capacity } = data;
     const weekly = state === root && data.weekly === true;
     const localKickoff = new Date(kickoff);
     if (!title || !venue || !/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(data.kickoff) ||
       !Number.isFinite(kickoff) || (!state.game || data.fresh) && kickoff <= Date.now() ||
-      !Number.isInteger(capacity) || capacity < 2 || capacity > 60 ||
-      !Number.isInteger(cost) || cost < 0 || cost > 1000000 ||
-      !Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000) throw err('Check the fixture details.');
+      !Number.isInteger(capacity) || capacity < 2 || capacity > 60) throw err('Check the fixture details.');
     if (localKickoff.getDay() !== 2 || localKickoff.getHours() !== weeklyKickoffHour ||
         localKickoff.getMinutes() !== 0) throw err('Games kick off on Tuesdays at 7 pm UK time.');
     if (!data.fresh && capacity < playing(state).length + state.players.filter(p => p.status === 'offered').length) {
@@ -263,45 +228,10 @@ function manage(state, action, data, root = state) {
       throw err('A fixture already exists at that kick-off time.');
     }
     if (data.fresh) archive(state);
-    state.game = { title, venue, kickoff: new Date(kickoff).toISOString(), capacity, cost, fee: fixedFee, weekly, payment: clean(data.payment, 300) };
+    state.game = { ...state.game, title, venue, kickoff: new Date(kickoff).toISOString(), capacity, weekly };
     return;
   }
   if (!state.game) throw err('Create a fixture first.');
-  if (action === 'record-payment') {
-    const account = playerAccounts(root).find(entry => entry.key === data.key);
-    if (!account || !Number.isInteger(data.amount) || data.amount < 1 || data.amount > 1000000 ||
-        typeof data.id !== 'string' || !/^[a-f0-9-]{36}$/.test(data.id)) throw err('Choose a player and enter a valid payment amount.');
-    root.payments ||= [];
-    if (!root.payments.some(payment => payment.id === data.id)) {
-      root.payments.push({ id: data.id, name: account.name, profileId: account.key.startsWith('player:') ? account.key.slice(7) : undefined, amount: data.amount, date: new Date().toISOString() });
-    }
-    return;
-  }
-  if (action === 'link-player') {
-    const profileId = typeof data.target === 'string' ? data.target.slice(7) : '';
-    const profile = Object.hasOwn(root.profiles || {}, profileId) && root.profiles[profileId];
-    const old = playerAccounts(root).find(account => account.key === data.key && !account.phoneEnd);
-    if (!profile || !old || data.target !== 'player:' + profile.id) throw err('Choose an existing record and a player account.');
-    if (clean(data.linkCode, 20).toLowerCase() !== profile.linkCode) throw err('Enter the linking code the player gave you.');
-    const matches = row => !row.profileId && playerKey(row.name) === old.key;
-    const fixtures = allFixtures(root);
-    if (fixtures.some(fixture => fixture.players.some(matches) && fixture.players.some(player => player.profileId === profile.id))) {
-      throw err('Both records appear in the same fixture. Remove the duplicate before linking.', 409);
-    }
-    for (const fixture of fixtures) {
-      for (const player of fixture.players.filter(matches)) {
-        player.profileId = profile.id;
-        player.identity = profile.id;
-        player.fullName = true;
-      }
-    }
-    for (const row of [...(root.ledger || []), ...(root.payments || [])].filter(matches)) row.profileId = profile.id;
-    return;
-  }
-  if (action === 'undo-payment') {
-    root.payments = (root.payments || []).filter(payment => payment.id !== data.id);
-    return;
-  }
   if (action === 'attendance') {
     const row = root.ledger?.find(entry => entry.id === data.id && entry.kickoff === data.kickoff);
     if (typeof data.played !== 'boolean') throw err('Choose an attendance status.');
@@ -334,16 +264,9 @@ function manage(state, action, data, root = state) {
     [state.teams[0][a], state.teams[1][b]] = [state.teams[1][b], state.teams[0][a]];
     return;
   }
-  if (action === 'ledger-paid' && data.kickoff !== state.game.kickoff) {
-    const historical = root.ledger?.find(row => row.id === data.id && row.kickoff === data.kickoff);
-    if (!historical) throw err('Payment record no longer exists.');
-    historical.paid = !historical.paid;
-    return;
-  }
   const player = state.players.find(p => p.id === data.id);
   if (!player) throw err('Player no longer on the list.');
-  if (action === 'paid' || action === 'ledger-paid') player.paid = !player.paid;
-  else if (action === 'confirm' && player.status === 'offered' && !started(state)) player.status = 'playing';
+  if (action === 'confirm' && player.status === 'offered' && !started(state)) player.status = 'playing';
   else if (action === 'remove') player.status = 'out';
   else throw err('Unknown action.', 404);
 }

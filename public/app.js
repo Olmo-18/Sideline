@@ -54,7 +54,8 @@ function render() {
     return;
   }
   const active = ['playing', 'reserve', 'offered'].includes(mine?.status);
-  const full = confirmed + offered >= game.capacity;
+  const remaining = Math.max(0, game.capacity - confirmed - offered);
+  const full = remaining === 0;
   const availability = mine?.status === 'reserve' ? 'Reserve · ' + (mine.position === 1 ? 'first in line' : 'position ' + mine.position) :
     mine?.status === 'offered' ? 'You have a place on offer until ' + date(mine.until) + '.' : statusLabel[mine?.status];
   const controls = closed ? '<p>Sign-ups closed</p>' :
@@ -69,7 +70,15 @@ function render() {
     controls + '</section>' +
     '<section class="panel"><div class="section-head"><h2>Players</h2>' +
     (organiser ? '<div class="actions">' + button('Edit fixture', 'edit', 'soft small') + button('Add player', 'add-form', 'small') + '</div>' : '') +
-    '</div><p class="muted">' + reserves + ' waiting · ' + offered + ' places on offer</p>' + players() + '</section>' + teams();
+    '</div>' + (closed ? '' : '<p class="muted" aria-live="polite">' +
+      availabilityStatus(remaining, reserves, confirmed >= game.capacity) + '</p>') + players() + '</section>' + teams();
+}
+
+function availabilityStatus(remaining, reserves, filled) {
+  if (remaining) return remaining + (remaining === 1 ? ' space remaining' : ' spaces remaining');
+  const parts = [filled ? 'Game full' : 'All remaining spaces held for reserves'];
+  parts.push(reserves ? reserves + ' on the waiting list' : 'Waiting list open');
+  return parts.join(' · ');
 }
 
 function fixturePicker() {

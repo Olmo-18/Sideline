@@ -217,10 +217,10 @@ function renderAttendance() {
     const count = rows.filter(row => row.played).length;
     return '<table class="attendance-table"><caption><strong>' + esc(fullDate.format(new Date(kickoff))) +
       '</strong><span>' + esc(rows[0].game) + ' · ' + count + (upcoming ? ' confirmed' : ' played') + '</span></caption>' +
-      '<thead><tr><th scope="col">Player</th><th scope="col">Status</th>' +
+      '<thead><tr><th scope="col">Player</th><th scope="col">Status</th><th scope="col">Cumulative games</th>' +
       (upcoming ? '' : '<th scope="col">Update</th>') + '</tr></thead><tbody>' +
       rows.map(row => '<tr><td>' + esc(row.name) + '</td><td>' + (upcoming ? 'Confirmed' : row.played ? 'Played' : 'Absent') +
-        '</td>' + (upcoming ? '' : '<td><button type="button" class="soft small" data-action="attendance" data-id="' +
+        '</td><td>' + row.cumulativeGames + '</td>' + (upcoming ? '' : '<td><button type="button" class="soft small" data-action="attendance" data-id="' +
         esc(row.id) + '" data-kickoff="' + esc(kickoff) + '" data-played="' + !row.played +
         '" aria-label="' + (row.played ? 'Mark absent: ' : 'Mark played: ') + esc(row.name) + '">' +
         (row.played ? 'Mark absent' : 'Mark played') + '</button></td>') + '</tr>').join('') + '</tbody></table>';

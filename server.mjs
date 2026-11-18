@@ -78,10 +78,14 @@ function attendanceRows(state) {
       id, name, game: fixture.game.title, kickoff: fixture.game.kickoff, upcoming: true
     }));
   });
-  return [...live, ...archived]
-    .map(({ id, name, game, kickoff, played, upcoming = false }) =>
-      ({ id, name, game, kickoff, played: played !== false, upcoming }))
-    .sort((a, b) => Number(b.upcoming) - Number(a.upcoming) ||
+  const totals = new Map();
+  const rows = [...live, ...archived].sort((a, b) => a.kickoff.localeCompare(b.kickoff));
+  return rows.map(({ id, name, game, kickoff, played = true, upcoming = false }) => {
+    const key = playerKey(name);
+    const cumulativeGames = (totals.get(key) || 0) + Number(played && !upcoming);
+    totals.set(key, cumulativeGames);
+    return { id, name, game, kickoff, played, upcoming, cumulativeGames };
+  }).sort((a, b) => Number(b.upcoming) - Number(a.upcoming) ||
       (a.upcoming ? a.kickoff.localeCompare(b.kickoff) : b.kickoff.localeCompare(a.kickoff)) ||
       a.name.localeCompare(b.name));
 }

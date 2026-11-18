@@ -166,4 +166,16 @@ test('organiser, shared roster, FIFO offers, teams and durable attendance', asyn
   await recipient('join', { name: 'Alec Guest' });
   assert.equal((await admin(undefined, { fixture })).confirmed, 1);
   assert.equal((await admin()).players.some(player => player.name === 'Alec Guest'), false);
+  await admin('add', { fixture, name: 'tom  l' });
+  const olderTuesday = new Date(previousTuesday);
+  olderTuesday.setUTCDate(olderTuesday.getUTCDate() - 7);
+  const olderKickoff = olderTuesday.toISOString().slice(0, 10) + 'T19:00';
+  const history = await admin('game', { ...details, fixture, kickoff: olderKickoff });
+  const earlierTom = history.attendance.find(row => row.name === 'tom  l');
+  assert.equal(earlierTom.cumulativeGames, 1);
+  assert.equal(history.attendance.find(row => row.id === oldTom.id).cumulativeGames, 2);
+  assert.equal(history.attendance.find(row => row.name === 'Tom L' && row.upcoming).cumulativeGames, 2);
+  const corrected = await admin('attendance', { id: earlierTom.id, kickoff: earlierTom.kickoff, played: false });
+  assert.equal(corrected.attendance.find(row => row.id === earlierTom.id).cumulativeGames, 0);
+  assert.equal(corrected.attendance.find(row => row.id === oldTom.id).cumulativeGames, 1);
 });

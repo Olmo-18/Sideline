@@ -77,7 +77,6 @@ function players() {
     const status = p.status === 'reserve' ? 'Reserve · ' + (++reserve === 1 ? 'first in line' : reserve) : statusLabel[p.status];
     return '<li class="row"><div><div class="name">' + esc(p.name) + '</div><span class="pill ' + (p.status === 'offered' ? 'offer' : '') + '">' + status +
       '</span></div><div class="actions">' +
-      (p.status === 'playing' || p.paid ? button(p.paid ? 'Paid ✓' : 'Outstanding', 'paid', 'soft small', p.id) : '') +
       (p.status === 'offered' && !state.closed ? button('Confirm', 'confirm', 'small', p.id) : '') +
       (['playing', 'offered', 'reserve'].includes(p.status) ? button('Remove', 'remove-form', 'quiet small', p.id) : '') +
       '</div></li>';
@@ -100,14 +99,11 @@ function teams() {
 }
 
 function payment() {
-  const { game, organiser, mine } = state;
-  const outstanding = organiser ? state.players.filter(p => p.status === 'playing' && !p.paid) : [];
+  const { game } = state;
   let link;
   try { const url = new URL(game.payment); if (url.protocol === 'https:') link = url.href; } catch {}
   return '<section class="panel"><div class="section-head"><h2>Payments</h2><strong>' + money(state.due) + ' each</strong></div>' +
-    (organiser ? '<p class="muted">Pitch cost ' + money(game.cost) + ' · ' + outstanding.length + ' outstanding</p>' +
-      (outstanding.length ? '<p>' + outstanding.map(p => esc(p.name)).join(', ') + '</p>' : '') : '') +
-    (mine?.status === 'playing' ? '<p>Your payment · ' + (mine.paid ? 'Paid' : 'Outstanding') + '</p>' : '') +
+    (state.organiser ? '<p class="muted">Pitch cost ' + money(game.cost) + '</p>' : '') +
     (link ? '<a class="link soft" href="' + esc(link) + '" target="_blank" rel="noopener noreferrer">Open payment link</a>' :
       game.payment ? '<p class="payment">' + esc(game.payment) + '</p>' : '<p class="muted">Payment details haven’t been added yet.</p>') + '</section>';
 }
@@ -177,8 +173,27 @@ document.addEventListener('click', async event => {
   if (action === 'copy-teams') return copy('*' + state.game.title + '*\n' + date(state.game.kickoff) + ' · ' + state.game.venue + '\n\n' +
     sides().map((names, i) => '*Team ' + ['A', 'B'][i] + '*\n' + names.join('\n')).join('\n\n'), 'Teams copied for WhatsApp.');
   if (action === 'ledger') return showLedger();
-  if (action === 'ledger-paid') {
-    const ok = await update({ action, id, kickoff: control.dataset.kickoff });
+  if (action === 'record-payment') {
+    const account = state.accounts[Number(id)];
+    if (!account) return;
+    const paymentId = crypto.randomUUID();
+    return form('Record payment for ' + esc(account.name),
+      '<label>Amount received (£)<input type="number" name="amount" min="0.01" max="10000" step="0.01" required></label>',
+      'Record payment', async values => {
+        const ok = await update({ action, key: account.key, id: paymentId, amount: Math.round(Number(values.amount) * 100) });
+        if (ok) setTimeout(showLedger, 0);
+        return ok;
+      });
+  }
+  if (action === 'undo-payment') {
+    return form('Remove this payment entry?', '<p>The balance will be recalculated.</p>', 'Remove entry', async () => {
+      const ok = await update({ action, id });
+      if (ok) setTimeout(showLedger, 0);
+      return ok;
+    });
+  }
+  if (action === 'attendance') {
+    const ok = await update({ action, id, kickoff: control.dataset.kickoff, played: control.dataset.played === 'true' });
     if (ok) showLedger();
     return;
   }
@@ -191,16 +206,29 @@ setInterval(() => { if (!document.hidden && !modal.open) update(undefined, true)
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !modal.open) update(undefined, true); });
 
 function showLedger() {
-  const rows = state.ledger || [];
-  const outstanding = rows.reduce((sum, row) => sum + (row.paid ? 0 : row.fee), 0);
-  modal.innerHTML = '<h2 id="dialog-title">Payment sheet</h2><p><strong>' + money(outstanding) +
-    ' outstanding</strong></p>' + (rows.length ? '<div class="sheet"><table><thead><tr><th>Player</th><th>Fixture</th><th>Owes</th><th>Payment</th></tr></thead><tbody>' +
-    rows.map(row => '<tr><td>' + esc(row.name) + '</td><td>' + esc(date(row.kickoff)) + '</td><td>' +
-      money(row.paid ? 0 : row.fee) + '</td><td><button type="button" class="soft small" data-action="ledger-paid" data-id="' + esc(row.id) +
-      '" data-kickoff="' + esc(row.kickoff) + '">' + (row.paid ? 'Paid ✓' : 'Mark paid') + '</button></td></tr>').join('') + '</tbody></table></div>' :
-    '<p class="muted">Payment records appear when players are confirmed.</p>') +
+  const accounts = state.accounts || [];
+  const outstanding = accounts.reduce((sum, row) => sum + Math.max(0, row.charged - row.paid), 0);
+  const pastGames = state.ledger.filter(row => row.kickoff !== state.game.kickoff && Date.parse(row.kickoff) <= Date.now());
+  const payments = accounts.flatMap(account => account.payments).sort((a, b) => b.date.localeCompare(a.date));
+  modal.innerHTML = '<h2 id="dialog-title">Player balances</h2><p><strong>' + money(outstanding) +
+    ' outstanding</strong></p>' + (accounts.length ?
+    '<div class="sheet"><table><thead><tr><th>Player</th><th>Games played</th><th>Total paid</th><th>Balance</th><th>Payment</th></tr></thead><tbody>' +
+    accounts.map((row, index) => {
+      const balance = row.charged - row.paid;
+      return '<tr><td>' + esc(row.name) + '</td><td>' + row.games + '</td><td>' + money(row.paid) + '</td><td>' +
+        (balance > 0 ? money(balance) + ' owed' : balance < 0 ? money(-balance) + ' credit' : 'Settled') +
+        '</td><td>' + button('Record payment', 'record-payment', 'small soft', index) + '</td></tr>';
+    }).join('') + '</tbody></table></div>' : '<p class="muted">Balances appear when players join.</p>') +
+    (payments.length ? '<details><summary>Payment history</summary><ul class="list">' + payments.map(payment =>
+      '<li class="row"><span>' + esc(payment.name) + ' · ' + money(payment.amount) + ' · ' + esc(date(payment.date)) + '</span>' +
+      button('Remove entry', 'undo-payment', 'small quiet', payment.id) + '</li>').join('') + '</ul></details>' : '') +
+    (pastGames.length ? '<details><summary>Past attendance</summary><ul class="list">' + pastGames.map(row =>
+      '<li class="row"><span>' + esc(row.name) + ' · ' + esc(date(row.kickoff)) + ' · ' + (row.played === false ? 'Did not play' : 'Played') +
+      '</span><button type="button" class="soft small" data-action="attendance" data-id="' + esc(row.id) +
+      '" data-kickoff="' + esc(row.kickoff) + '" data-played="' + (row.played === false) + '">' +
+      (row.played === false ? 'Mark played' : 'Mark absent') + '</button></li>').join('') + '</ul></details>' : '') +
     '<p class="dialog-status warning" role="alert"></p><div class="actions">' +
-    (rows.length ? button('Download CSV', 'ledger-csv') : '') +
+    (accounts.length ? button('Download CSV', 'ledger-csv') : '') +
     '<button type="button" class="soft" data-close-sheet>Close</button></div>';
   modal.querySelector('[data-close-sheet]').onclick = () => modal.close();
   if (!modal.open) modal.showModal();
@@ -212,9 +240,10 @@ function downloadLedger() {
     if (/^\s*[=+@-]/.test(text) || /^[\r\n\t]/.test(text)) text = "'" + text;
     return '"' + text.replaceAll('"', '""') + '"';
   };
-  const csv = [['Full name','Game','Kick-off (UK time)','Fee GBP','Paid','Outstanding GBP'],
-    ...state.ledger.map(row => [row.name, row.game, date(row.kickoff), (row.fee / 100).toFixed(2),
-      row.paid ? 'Yes' : 'No', (row.paid ? 0 : row.fee / 100).toFixed(2)])]
+  const pounds = pence => (pence / 100).toFixed(2);
+  const csv = [['Full name','Games played','Charges GBP','Paid GBP','Owes GBP','Credit GBP'],
+    ...state.accounts.map(row => [row.name, row.games, pounds(row.charged), pounds(row.paid),
+      pounds(Math.max(0, row.charged - row.paid)), pounds(Math.max(0, row.paid - row.charged))])]
     .map(row => row.map(field).join(',')).join('\r\n');
   const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' }));
   const link = document.createElement('a');

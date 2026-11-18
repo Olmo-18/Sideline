@@ -40,8 +40,34 @@ function paymentRows(state) {
   if (!state.game) return [];
   return state.players.filter(p => p.status === 'playing' || p.paid).map(p => ({
     id: p.id, name: p.name, game: state.game.title, kickoff: state.game.kickoff,
-    fee: fee(state), paid: p.paid
+    fee: fee(state), paid: p.paid, played: started(state) && p.status === 'playing'
   }));
+}
+
+const playerKey = name => name.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+
+function playerAccounts(state) {
+  const accounts = new Map();
+  const accountFor = name => {
+    const key = playerKey(name);
+    if (!accounts.has(key)) accounts.set(key, { key, name, games: 0, charged: 0, paid: 0, payments: [] });
+    return accounts.get(key);
+  };
+  for (const player of state.players) accountFor(player.name);
+  for (const row of [...(state.ledger || []), ...paymentRows(state)]) {
+    const account = accountFor(row.name);
+    if (row.played !== false) {
+      account.games++;
+      account.charged += row.fee;
+    }
+    if (row.paid) account.paid += row.fee;
+  }
+  for (const payment of state.payments || []) {
+    const account = accountFor(payment.name);
+    account.payments.push(payment);
+    account.paid += payment.amount;
+  }
+  return [...accounts.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function archive(state) {
@@ -103,7 +129,7 @@ function view(state, organiser, identity) {
     mine: mine && { name: mine.name, status: mine.status, until: mine.until, paid: mine.paid, position: waiting.indexOf(mine) + 1 },
     teams: organiser ? state.teams : teams,
     players: organiser ? state.players.map(({ id, name, status, paid }) => ({ id, name, status, paid })) : confirmed.map(publicName),
-    ...(organiser && { ledger: [...paymentRows(state), ...(state.ledger || []).slice().reverse()] }),
+    ...(organiser && { ledger: [...paymentRows(state), ...(state.ledger || []).slice().reverse()], accounts: playerAccounts(state) }),
     unassigned: confirmed.filter(p => !assigned.has(p.id)).length
   };
 }
@@ -127,7 +153,7 @@ async function body(req) {
 function add(state, name, identity, organiser) {
   if (!name) throw err('Enter a name.');
   if (!organiser && !/^\p{L}.*\s+.*\p{L}/u.test(name)) throw err('Enter your first and last name.');
-  const existing = state.players.find(p => p.name.toLowerCase() === name.toLowerCase() && (!identity || p.identity !== identity));
+  const existing = state.players.find(p => playerKey(p.name) === playerKey(name) && (!identity || p.identity !== identity));
   if (existing) throw err('That name is already on the list. Ask the organiser if that entry is yours.');
   let player = identity && state.players.find(p => p.identity === identity);
   if (player && ['playing', 'reserve', 'offered'].includes(player.status)) return;
@@ -161,6 +187,27 @@ function manage(state, action, data) {
     return;
   }
   if (!state.game) throw err('Create a fixture first.');
+  if (action === 'record-payment') {
+    const account = playerAccounts(state).find(entry => entry.key === data.key);
+    if (!account || !Number.isInteger(data.amount) || data.amount < 1 || data.amount > 1000000 ||
+        typeof data.id !== 'string' || !/^[a-f0-9-]{36}$/.test(data.id)) throw err('Choose a player and enter a valid payment amount.');
+    state.payments ||= [];
+    if (!state.payments.some(payment => payment.id === data.id)) {
+      state.payments.push({ id: data.id, name: account.name, amount: data.amount, date: new Date().toISOString() });
+    }
+    return;
+  }
+  if (action === 'undo-payment') {
+    state.payments = (state.payments || []).filter(payment => payment.id !== data.id);
+    return;
+  }
+  if (action === 'attendance') {
+    const row = state.ledger?.find(entry => entry.id === data.id && entry.kickoff === data.kickoff);
+    if (!row || Date.parse(row.kickoff) > Date.now()) throw err('This game has not finished.');
+    if (typeof data.played !== 'boolean') throw err('Choose an attendance status.');
+    row.played = data.played;
+    return;
+  }
   if (action === 'add') return add(state, clean(data.name, 40), null, true);
   if (action === 'shuffle') {
     const ids = playing(state).map(p => p.id);

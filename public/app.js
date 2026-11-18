@@ -182,29 +182,18 @@ function form(title, fields, submit, run) {
 
 function fixture(create) {
   const game = state.game;
-  const parts = iso => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/London', dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)).replace(' ', 'T');
+  const ukDate = iso => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/London', dateStyle: 'short' }).format(new Date(iso));
   form(create ? 'Add fixture' : 'Fixture details',
     '<label>Game name<input name="title" required maxlength="80" value="' + esc(game?.title || 'Tuesday Football') +
     '"></label><label>Pitch<input name="venue" required maxlength="100" value="' + esc(game?.venue) +
-    '"></label><label>Kick-off (UK time)<input type="datetime-local" name="kickoff" required value="' +
-    (game && !create ? parts(game.kickoff) : '') +
+    '"></label><label>Kick-off date · Tuesday at 7 pm UK time<input type="date" name="gameDate" min="1970-01-06" step="7" required value="' +
+    (game && !create ? ukDate(game.kickoff) : '') +
     '"></label>' + (!create && !fixtureId ? '<label class="check"><input type="checkbox" name="weekly" ' + (game?.weekly ? 'checked' : '') + '> Repeat every Tuesday at 7 pm</label>' : '') + '<div class="form-columns"><label>Places<input name="capacity" type="number" min="2" max="60" required value="' + (game?.capacity ?? 14) +
     '"></label><label>Pitch cost (£)<input name="cost" type="number" min="0" max="10000" step="0.01" required value="' + (game ? game.cost / 100 : 112) +
     '"></label></div><label>Fixed fee per player (£)<input name="fee" type="number" min="0" max="1000" step="0.01" required value="' + ((state.game ? state.due : 600) / 100) + '"></label><label>Payment link or details <textarea name="payment" maxlength="300">' + esc(game?.payment) +
-    '</textarea></label>', 'Save fixture', values => update({ ...values, action: create ? 'create-fixture' : 'game', weekly: Boolean(values.weekly),
+    '</textarea></label>', 'Save fixture', values => update({ ...values, action: create ? 'create-fixture' : 'game', kickoff: values.gameDate + 'T19:00', weekly: Boolean(values.weekly),
       capacity: Number(values.capacity), cost: Math.round(Number(values.cost) * 100),
       fee: values.fee === '' ? null : Math.round(Number(values.fee) * 100) }));
-  const repeat = modal.querySelector('[name=weekly]');
-  const kickoff = modal.querySelector('[name=kickoff]');
-  if (!repeat) return;
-  repeat.onchange = () => {
-    if (!repeat.checked) return;
-    const now = parts(new Date());
-    const chosen = new Date((kickoff.value.slice(0, 10) || now.slice(0, 10)) + 'T19:00:00Z');
-    chosen.setUTCDate(chosen.getUTCDate() + (2 - chosen.getUTCDay() + 7) % 7);
-    if (chosen.toISOString().slice(0, 16) <= now) chosen.setUTCDate(chosen.getUTCDate() + 7);
-    kickoff.value = chosen.toISOString().slice(0, 16);
-  };
 }
 
 async function copy(text, message) {

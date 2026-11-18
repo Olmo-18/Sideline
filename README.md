@@ -23,7 +23,7 @@ Open http://localhost:3000. Local records go into the ignored `data/` directory.
 
 ## How the weekly game works
 
-- Kick-off is entered and shown in UK time. Sign-ups close at kick-off.
+- Choose the Tuesday date for each fixture. Kick-off is fixed at 7 pm UK time. Sign-ups close at kick-off.
 - Each member signs up with a display name. Their browser remembers their sign-up. If they switch phones or clear their cookies, the organiser can update the entry for them. Add guests individually, for example `Alec +1` as a separate spot.
 - When a spot opens, the first reserve gets an in-app offer and the spot is held for up to 24 hours or until kick-off. If they decline or the offer expires, the next reserve gets the offer. Players need to reopen the link to check. The organiser can message the player in WhatsApp and confirm on their behalf.
 - Shuffle makes two randomly selected teams from confirmed players. Swap exchanges two players across the teams. Copy formats the current teams for pasting into WhatsApp.

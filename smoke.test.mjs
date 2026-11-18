@@ -51,7 +51,12 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await olly('add', { name: 'Unauthorized' }, 401);
   await admin('login', { password: 'wrong' }, 401);
   await admin('login', { password });
-  const kickoff = (new Date().getUTCFullYear() + 1) + '-11-23T19:00';
+  const tuesday = yearsAhead => {
+    const date = new Date(Date.UTC(new Date().getUTCFullYear() + yearsAhead, 10, 23));
+    date.setUTCDate(date.getUTCDate() + (2 - date.getUTCDay() + 7) % 7);
+    return date.toISOString().slice(0, 10) + 'T19:00';
+  };
+  const kickoff = tuesday(1);
   await admin('game', { title: 'Tuesday football', venue: 'Main pitch', kickoff, capacity: 2, cost: 1600 });
   assert.equal((await olly()).game.title, 'Tuesday Football');
   const playerPassword = 'a-long-test-password';
@@ -147,8 +152,9 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   const corrected = await admin('undo-payment', { id });
   assert.equal(corrected.accounts.find(row => row.key === account.key).paid, 600);
   assert.equal((await olly()).game.meetingPoint, 'eaten.tilt.linked');
-  const futureKickoff = (new Date().getUTCFullYear() + 2) + '-11-23T19:00';
+  const futureKickoff = tuesday(2);
   const details = { title: 'Later game', venue: 'Main pitch', kickoff: futureKickoff, capacity: 14, cost: 8400 };
+  await admin('create-fixture', { ...details, kickoff: futureKickoff.replace('19:00', '14:00') }, 400);
   const scheduled = await admin('create-fixture', details);
   const fixture = scheduled.fixtureId;
   assert.equal(scheduled.fixtures.length, 2);
@@ -174,7 +180,7 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('link-player', { key: legacy.key, target: target.key, linkCode: 'wrong' }, 400);
   await admin('link-player', { key: legacy.key, target: target.key, linkCode: enrolled.myAccount.linkCode });
   assert.equal((await recipient()).myAccount.paid, 600);
-  const laterKickoff = (new Date().getUTCFullYear() + 3) + '-11-23T19:00';
+  const laterKickoff = tuesday(3);
   const movedMain = await admin('game', { ...details, title: 'Main game', kickoff: laterKickoff });
   assert.equal(movedMain.nextFixtureId, fixture);
   assert.equal(movedMain.fixtures[0].id, fixture);

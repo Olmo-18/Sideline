@@ -254,8 +254,9 @@ function manage(state, action, data, root = state) {
       !Number.isFinite(kickoff) || (!state.game || data.fresh) && kickoff <= Date.now() ||
       !Number.isInteger(capacity) || capacity < 2 || capacity > 60 ||
       !Number.isInteger(cost) || cost < 0 || cost > 1000000 ||
-      (!Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000) ||
-      (weekly && (localKickoff.getDay() !== 2 || localKickoff.getHours() !== weeklyKickoffHour || localKickoff.getMinutes() !== 0))) throw err('Check the fixture details.');
+      !Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000) throw err('Check the fixture details.');
+    if (localKickoff.getDay() !== 2 || localKickoff.getHours() !== weeklyKickoffHour ||
+        localKickoff.getMinutes() !== 0) throw err('Games kick off on Tuesdays at 7 pm UK time.');
     if (!data.fresh && capacity < playing(state).length + state.players.filter(p => p.status === 'offered').length) {
       throw err('Capacity is below the number of confirmed and offered places.');
     }

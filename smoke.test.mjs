@@ -52,7 +52,10 @@ test('organiser, shared roster, FIFO offers, teams and durable payments', async 
   await admin('login', { password });
   const kickoff = (new Date().getUTCFullYear() + 1) + '-11-23T19:00';
   await admin('game', { title: 'Tuesday football', venue: 'Main pitch', kickoff, capacity: 2, cost: 1600 });
-  assert.equal((await olly('join', { name: 'Olly Jones' })).mine.status, 'playing');
+  const firstSignup = await olly('join', { name: 'Olly Jones' });
+  assert.equal(firstSignup.mine.status, 'playing');
+  assert.equal(firstSignup.due, 600);
+  assert.equal((await admin()).ledger[0].fee, 600);
   assert.equal((await admin('add', { name: 'Alec +1' })).confirmed, 2);
   await admin('add', { name: 'Alec +1' }, 400);
   assert.equal((await robin('join', { name: 'Robin Green' })).mine.position, 1);

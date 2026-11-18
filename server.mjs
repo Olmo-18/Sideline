@@ -28,7 +28,8 @@ const playing = state => state.players.filter(p => p.status === 'playing');
 const queue = state => state.players.filter(p => p.status === 'reserve');
 const started = state => Date.parse(state.game?.kickoff) <= Date.now();
 
-const fee = state => state.game.fee ?? Math.ceil(state.game.cost / (playing(state).length || state.game.capacity));
+const defaultFee = 600;
+const fee = state => state.game.fee ?? defaultFee;
 const publicName = player => {
   if (!player.fullName) return player.name;
   const parts = player.name.split(/\s+/);
@@ -133,14 +134,14 @@ function manage(state, action, data) {
     const venue = clean(data.venue, 100);
     const kickoff = Date.parse(data.kickoff);
     const { capacity, cost } = data;
-    const fixedFee = data.fee ?? null;
+    const fixedFee = data.fee ?? defaultFee;
     const weekly = data.weekly === true;
     const localKickoff = new Date(kickoff);
     if (!title || !venue || !/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(data.kickoff) ||
       !Number.isFinite(kickoff) || (!state.game || data.fresh) && kickoff <= Date.now() ||
       !Number.isInteger(capacity) || capacity < 2 || capacity > 60 ||
       !Number.isInteger(cost) || cost < 0 || cost > 1000000 ||
-      (fixedFee !== null && (!Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000)) ||
+      (!Number.isInteger(fixedFee) || fixedFee < 0 || fixedFee > 100000) ||
       (weekly && (localKickoff.getDay() !== 2 || localKickoff.getHours() !== 14 || localKickoff.getMinutes() !== 0))) throw err('Check the fixture details.');
     if (!data.fresh && capacity < playing(state).length + state.players.filter(p => p.status === 'offered').length) {
       throw err('Capacity is below the number of confirmed and offered places.');

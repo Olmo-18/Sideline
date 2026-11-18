@@ -139,7 +139,7 @@ function fixture(fresh) {
     (game ? parts(fresh ? Date.parse(game.kickoff) + 7 * 86400000 : game.kickoff) : '') +
     '"></label><label class="check"><input type="checkbox" name="weekly" ' + (game?.weekly ? 'checked' : '') + '> Repeat every Tuesday at 2 pm</label><div class="form-columns"><label>Places<input name="capacity" type="number" min="2" max="60" required value="' + (game?.capacity ?? 14) +
     '"></label><label>Pitch cost (£)<input name="cost" type="number" min="0" max="10000" step="0.01" required value="' + (game ? game.cost / 100 : 112) +
-    '"></label></div><label>Fixed fee per player (£)<input name="fee" type="number" min="0" max="1000" step="0.01" placeholder="Leave blank to split pitch cost" value="' + ((game?.fee ?? 600) / 100) + '"></label><label>Payment link or details <textarea name="payment" maxlength="300">' + esc(game?.payment) +
+    '"></label></div><label>Fixed fee per player (£)<input name="fee" type="number" min="0" max="1000" step="0.01" required value="' + ((state.game ? state.due : 600) / 100) + '"></label><label>Payment link or details <textarea name="payment" maxlength="300">' + esc(game?.payment) +
     '</textarea></label>', 'Save fixture', values => update({ ...values, action: 'game', fresh, weekly: Boolean(values.weekly),
       capacity: Number(values.capacity), cost: Math.round(Number(values.cost) * 100),
       fee: values.fee === '' ? null : Math.round(Number(values.fee) * 100) }));
